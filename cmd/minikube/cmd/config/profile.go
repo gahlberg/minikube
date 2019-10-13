@@ -17,32 +17,72 @@ limitations under the License.
 package config
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	pkgConfig "k8s.io/minikube/pkg/minikube/config"
+	"k8s.io/minikube/pkg/minikube/constants"
+	"k8s.io/minikube/pkg/minikube/exit"
+	"k8s.io/minikube/pkg/minikube/kubeconfig"
+	"k8s.io/minikube/pkg/minikube/out"
 )
 
+// ProfileCmd represents the profile command
 var ProfileCmd = &cobra.Command{
-	Use:   "profile MINIKUBE_PROFILE_NAME.  You can return to the default minikube profile by running `minikube profile default`",
-	Short: "Profile sets the current minikube profile",
-	Long:  "profile sets the current minikube profile.  This is used to run and manage multiple minikube instance.  You can return to the default minikube profile by running `minikube profile default`",
+	Use:   "profile [MINIKUBE_PROFILE_NAME].  You can return to the default minikube profile by running `minikube profile default`",
+	Short: "Profile gets or sets the current minikube profile",
+	Long:  "profile sets the current minikube profile, or gets the current profile if no arguments are provided.  This is used to run and manage multiple minikube instance.  You can return to the default minikube profile by running `minikube profile default`",
 	Run: func(cmd *cobra.Command, args []string) {
-		if len(args) != 1 {
-			fmt.Fprintln(os.Stderr, "usage: minikube profile MINIKUBE_PROFILE_NAME")
-			os.Exit(1)
+		if len(args) == 0 {
+			profile := viper.GetString(pkgConfig.MachineProfile)
+			out.T(out.Empty, profile)
+			os.Exit(0)
+		}
+
+		if len(args) > 1 {
+			exit.UsageT("usage: minikube profile [MINIKUBE_PROFILE_NAME]")
 		}
 
 		profile := args[0]
 		if profile == "default" {
 			profile = "minikube"
+		} else {
+			// not validating when it is default profile
+			errProfile, ok := ValidateProfile(profile)
+			if !ok && errProfile != nil {
+				out.FailureT(errProfile.Msg)
+			}
 		}
+
+		if !pkgConfig.ProfileExists(profile) {
+			err := pkgConfig.CreateEmptyProfile(profile)
+			if err != nil {
+				exit.WithError("Creating a new profile failed", err)
+			}
+			out.SuccessT("Created a new profile : {{.profile_name}}", out.V{"profile_name": profile})
+		}
+
 		err := Set(pkgConfig.MachineProfile, profile)
 		if err != nil {
-			fmt.Fprintln(os.Stdout, err)
-		} else {
-			fmt.Fprintln(os.Stdout, fmt.Sprintf("minikube profile was successfully set to %s", profile))
+			exit.WithError("Setting profile failed", err)
 		}
+		cc, err := pkgConfig.Load()
+		// might err when loading older version of cfg file that doesn't have KeepContext field
+		if err != nil && !os.IsNotExist(err) {
+			out.ErrT(out.Sad, `Error loading profile config: {{.error}}`, out.V{"error": err})
+		}
+		if err == nil {
+			if cc.MachineConfig.KeepContext {
+				out.SuccessT("Skipped switching kubectl context for {{.profile_name}} because --keep-context was set.", out.V{"profile_name": profile})
+				out.SuccessT("To connect to this cluster, use: kubectl --context={{.profile_name}}", out.V{"profile_name": profile})
+			} else {
+				err := kubeconfig.SetCurrentContext(profile, constants.KubeconfigPath)
+				if err != nil {
+					out.ErrT(out.Sad, `Error while setting kubectl current context :  {{.error}}`, out.V{"error": err})
+				}
+			}
+		}
+		out.SuccessT("minikube profile was successfully set to {{.profile_name}}", out.V{"profile_name": profile})
 	},
 }

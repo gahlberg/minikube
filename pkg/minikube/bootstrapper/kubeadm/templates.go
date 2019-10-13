@@ -22,13 +22,16 @@ import (
 	"text/template"
 )
 
-var kubeadmConfigTemplate = template.Must(template.New("kubeadmConfigTemplate").Funcs(template.FuncMap{
+// configTmplV1Alpha1 is for Kubernetes v1.11
+var configTmplV1Alpha1 = template.Must(template.New("configTmpl-v1alpha1").Funcs(template.FuncMap{
 	"printMapInOrder": printMapInOrder,
 }).Parse(`apiVersion: kubeadm.k8s.io/v1alpha1
 kind: MasterConfiguration
+{{if .NoTaintMaster}}noTaintMaster: true{{end}}
 api:
   advertiseAddress: {{.AdvertiseAddress}}
   bindPort: {{.APIServerPort}}
+  controlPlaneEndpoint: localhost
 kubernetesVersion: {{.KubernetesVersion}}
 certificatesDir: {{.CertDir}}
 networking:
@@ -36,42 +39,144 @@ networking:
 etcd:
   dataDir: {{.EtcdDataDir}}
 nodeName: {{.NodeName}}
-{{range .ExtraArgs}}{{.Component}}:{{range $i, $val := printMapInOrder .Options ": " }}
+{{if .ImageRepository}}imageRepository: {{.ImageRepository}}
+{{end}}{{if .CRISocket}}criSocket: {{.CRISocket}}
+{{end}}{{range .ExtraArgs}}{{.Component}}ExtraArgs:{{range $i, $val := printMapInOrder .Options ": " }}
   {{$val}}{{end}}
+{{end}}{{if .FeatureArgs}}featureGates: {{range $i, $val := .FeatureArgs}}
+  {{$i}}: {{$val}}{{end}}
 {{end}}`))
 
-var kubeletSystemdTemplate = template.Must(template.New("kubeletSystemdTemplate").Parse(`
-[Service]
-ExecStart=
-ExecStart=/usr/bin/kubelet {{.ExtraOptions}} {{if .FeatureGates}}--feature-gates={{.FeatureGates}}{{end}}
-
-[Install]
-{{if or (eq .ContainerRuntime "cri-o") (eq .ContainerRuntime "cri")}}Wants=crio.service{{else}}Wants=docker.socket{{end}}
+// configTmplV1Alpha3 is for Kubernetes v1.12
+var configTmplV1Alpha3 = template.Must(template.New("configTmpl-v1alpha3").Funcs(template.FuncMap{
+	"printMapInOrder": printMapInOrder,
+}).Parse(`apiVersion: kubeadm.k8s.io/v1alpha3
+kind: InitConfiguration
+apiEndpoint:
+  advertiseAddress: {{.AdvertiseAddress}}
+  bindPort: {{.APIServerPort}}
+bootstrapTokens:
+  - groups:
+      - system:bootstrappers:kubeadm:default-node-token
+    ttl: 24h0m0s
+    usages:
+      - signing
+      - authentication
+nodeRegistration:
+  criSocket: {{if .CRISocket}}{{.CRISocket}}{{else}}/var/run/dockershim.sock{{end}}
+  name: {{.NodeName}}
+  taints: []
+---
+apiVersion: kubeadm.k8s.io/v1alpha3
+kind: ClusterConfiguration
+{{if .ImageRepository}}imageRepository: {{.ImageRepository}}
+{{end}}{{range .ExtraArgs}}{{.Component}}ExtraArgs:{{range $i, $val := printMapInOrder .Options ": " }}
+  {{$val}}{{end}}
+{{end -}}
+{{if .FeatureArgs}}featureGates: {{range $i, $val := .FeatureArgs}}
+  {{$i}}: {{$val}}{{end}}
+{{end -}}
+certificatesDir: {{.CertDir}}
+clusterName: kubernetes
+controlPlaneEndpoint: localhost:{{.APIServerPort}}
+etcd:
+  local:
+    dataDir: {{.EtcdDataDir}}
+kubernetesVersion: {{.KubernetesVersion}}
+networking:
+  dnsDomain: {{if .DNSDomain}}{{.DNSDomain}}{{else}}cluster.local{{end}}
+  podSubnet: {{if .PodSubnet}}{{.PodSubnet}}{{else}}""{{end}}
+  serviceSubnet: {{.ServiceCIDR}}
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+evictionHard:
+  nodefs.available: "0%"
+  nodefs.inodesFree: "0%"
+  imagefs.available: "0%"
 `))
 
-const kubeletService = `
-[Unit]
+// configTmplV1Beta1 is for Kubernetes v1.13+
+var configTmplV1Beta1 = template.Must(template.New("configTmpl-v1beta1").Funcs(template.FuncMap{
+	"printMapInOrder": printMapInOrder,
+}).Parse(`apiVersion: kubeadm.k8s.io/v1beta1
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: {{.AdvertiseAddress}}
+  bindPort: {{.APIServerPort}}
+bootstrapTokens:
+  - groups:
+      - system:bootstrappers:kubeadm:default-node-token
+    ttl: 24h0m0s
+    usages:
+      - signing
+      - authentication
+nodeRegistration:
+  criSocket: {{if .CRISocket}}{{.CRISocket}}{{else}}/var/run/dockershim.sock{{end}}
+  name: {{.NodeName}}
+  taints: []
+---
+apiVersion: kubeadm.k8s.io/v1beta1
+kind: ClusterConfiguration
+{{ if .ImageRepository}}imageRepository: {{.ImageRepository}}
+{{end}}{{range .ExtraArgs}}{{.Component}}:
+  extraArgs:
+{{- range $i, $val := printMapInOrder .Options ": " }}
+    {{$val}}
+{{- end}}
+{{end -}}
+{{if .FeatureArgs}}featureGates:
+{{range $i, $val := .FeatureArgs}}{{$i}}: {{$val}}
+{{end -}}{{end -}}
+certificatesDir: {{.CertDir}}
+clusterName: kubernetes
+controlPlaneEndpoint: localhost:{{.APIServerPort}}
+dns:
+  type: CoreDNS
+etcd:
+  local:
+    dataDir: {{.EtcdDataDir}}
+kubernetesVersion: {{.KubernetesVersion}}
+networking:
+  dnsDomain: {{if .DNSDomain}}{{.DNSDomain}}{{else}}cluster.local{{end}}
+  podSubnet: ""
+  serviceSubnet: {{.ServiceCIDR}}
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+imageGCHighThresholdPercent: 100
+evictionHard:
+  nodefs.available: "0%"
+  nodefs.inodesFree: "0%"
+  imagefs.available: "0%"
+`))
+
+// kubeletSystemdTemplate hosts the override kubelet flags, written to kubeletSystemdConfFile
+var kubeletSystemdTemplate = template.Must(template.New("kubeletSystemdTemplate").Parse(`[Unit]
+{{if or (eq .ContainerRuntime "cri-o") (eq .ContainerRuntime "cri")}}Wants=crio.service{{else if eq .ContainerRuntime "containerd"}}Wants=containerd.service{{else}}Wants=docker.socket{{end}}
+
+[Service]
+ExecStart=
+ExecStart={{.KubeletPath}}{{if .ExtraOptions}} {{.ExtraOptions}}{{end}}
+
+[Install]
+`))
+
+// kubeletServiceTemplate is the base kubelet systemd template, written to kubeletServiceFile
+var kubeletServiceTemplate = template.Must(template.New("kubeletServiceTemplate").Parse(`[Unit]
 Description=kubelet: The Kubernetes Node Agent
 Documentation=http://kubernetes.io/docs/
 
 [Service]
-ExecStart=/usr/bin/kubelet
+ExecStart={{.KubeletPath}}
 Restart=always
 StartLimitInterval=0
-RestartSec=10
+# Tuned for local dev: faster than upstream default (10s), but slower than systemd default (100ms)
+RestartSec=600ms
 
 [Install]
 WantedBy=multi-user.target
-`
-
-var kubeadmRestoreTemplate = template.Must(template.New("kubeadmRestoreTemplate").Parse(`
-sudo kubeadm alpha phase certs all --config {{.KubeadmConfigFile}} &&
-sudo /usr/bin/kubeadm alpha phase kubeconfig all --config {{.KubeadmConfigFile}} &&
-sudo /usr/bin/kubeadm alpha phase controlplane all --config {{.KubeadmConfigFile}} &&
-sudo /usr/bin/kubeadm alpha phase etcd local --config {{.KubeadmConfigFile}}
 `))
-
-var kubeadmInitTemplate = template.Must(template.New("kubeadmInitTemplate").Parse("sudo /usr/bin/kubeadm init --config {{.KubeadmConfigFile}} --skip-preflight-checks"))
 
 // printMapInOrder sorts the keys and prints the map in order, combining key
 // value pairs with the separator character

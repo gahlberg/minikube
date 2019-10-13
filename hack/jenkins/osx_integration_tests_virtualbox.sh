@@ -15,21 +15,21 @@
 # limitations under the License.
 
 
-# This script runs the integration tests on an OSX machine for the Virtualbox Driver
+# This script runs the integration tests on an macOS machine for the VirtualBox Driver
 
 # The script expects the following env variables:
 # MINIKUBE_LOCATION: GIT_COMMIT from upstream build.
 # COMMIT: Actual commit ID from upstream build
 # EXTRA_BUILD_ARGS (optional): Extra args to be passed into the minikube integrations tests
-# access_token: The Github API access token. Injected by the Jenkins credential provider. 
+# access_token: The Github API access token. Injected by the Jenkins credential provider.
 
 
 set -e
 OS_ARCH="darwin-amd64"
 VM_DRIVER="virtualbox"
-JOB_NAME="OSX-Virtualbox"
-EXTRA_ARGS="--bootstrapper=localkube"
-EXTRA_START_ARGS="--kubernetes-version=file://$PWD/out/localkube"
+JOB_NAME="VirtualBox_macOS"
+EXTRA_ARGS="--bootstrapper=kubeadm"
+PARALLEL_COUNT=3
 
 # Download files and set permissions
 source common.sh

@@ -18,14 +18,22 @@ package main
 
 import (
 	"flag"
+	"fmt"
+	"os"
+
 	"github.com/golang/glog"
-	"k8s.io/minikube/pkg/localkube"
+	"k8s.io/minikube/pkg/storage"
 )
 
 func main() {
+	// Glog requires that /tmp exists.
+	if err := os.MkdirAll("/tmp", 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating tmpdir: %v\n", err)
+		os.Exit(1)
+	}
 	flag.Parse()
 
-	if err := localkube.StartStorageProvisioner(); err != nil {
+	if err := storage.StartStorageProvisioner(); err != nil {
 		glog.Exit(err)
 	}
 

@@ -18,10 +18,16 @@ limitations under the License.
 
 package constants
 
+var DefaultMountDir = "$HOME"
+
+// SupportedVMDrivers is a list of supported drivers on all platforms.
 var SupportedVMDrivers = [...]string{
-	"virtualbox",
-	"vmwarefusion",
-	"kvm",
-	"xhyve",
-	"hyperv",
+	DriverVirtualbox,
+	DriverParallels,
+	DriverVmwareFusion,
+	DriverHyperv,
+	DriverHyperkit,
+	DriverKvm2,
+	DriverVmware,
+	DriverNone,
 }

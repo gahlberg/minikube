@@ -17,13 +17,20 @@ limitations under the License.
 package cmd
 
 import (
-	"fmt"
-	"os"
+	"time"
 
+	"github.com/docker/machine/libmachine/mcnerror"
+	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
-	cmdUtil "k8s.io/minikube/cmd/util"
+	"github.com/spf13/viper"
 	"k8s.io/minikube/pkg/minikube/cluster"
+	pkg_config "k8s.io/minikube/pkg/minikube/config"
+	"k8s.io/minikube/pkg/minikube/constants"
+	"k8s.io/minikube/pkg/minikube/exit"
+	"k8s.io/minikube/pkg/minikube/kubeconfig"
 	"k8s.io/minikube/pkg/minikube/machine"
+	"k8s.io/minikube/pkg/minikube/out"
+	"k8s.io/minikube/pkg/util/retry"
 )
 
 // stopCmd represents the stop command
@@ -32,27 +39,46 @@ var stopCmd = &cobra.Command{
 	Short: "Stops a running local kubernetes cluster",
 	Long: `Stops a local kubernetes cluster running in Virtualbox. This command stops the VM
 itself, leaving all files intact. The cluster can be started again with the "start" command.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Stopping local Kubernetes cluster...")
-		api, err := machine.NewAPIClient()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error getting client: %s\n", err)
-			os.Exit(1)
-		}
-		defer api.Close()
-
-		if err = cluster.StopHost(api); err != nil {
-			fmt.Println("Error stopping machine: ", err)
-			cmdUtil.MaybeReportErrorAndExit(err)
-		}
-		fmt.Println("Machine stopped.")
-
-		if err := cmdUtil.KillMountProcess(); err != nil {
-			fmt.Println("Errors occurred deleting mount process: ", err)
-		}
-	},
+	Run: runStop,
 }
 
-func init() {
-	RootCmd.AddCommand(stopCmd)
+// runStop handles the executes the flow of "minikube stop"
+func runStop(cmd *cobra.Command, args []string) {
+	profile := viper.GetString(pkg_config.MachineProfile)
+	api, err := machine.NewAPIClient()
+	if err != nil {
+		exit.WithError("Error getting client", err)
+	}
+	defer api.Close()
+
+	nonexistent := false
+	stop := func() (err error) {
+		err = cluster.StopHost(api)
+		switch err := errors.Cause(err).(type) {
+		case mcnerror.ErrHostDoesNotExist:
+			out.T(out.Meh, `"{{.profile_name}}" VM does not exist, nothing to stop`, out.V{"profile_name": profile})
+			nonexistent = true
+			return nil
+		default:
+			return err
+		}
+	}
+
+	if err := retry.Expo(stop, 5*time.Second, 3*time.Minute, 5); err != nil {
+		exit.WithError("Unable to stop VM", err)
+	}
+
+	if !nonexistent {
+		out.T(out.Stopped, `"{{.profile_name}}" stopped.`, out.V{"profile_name": profile})
+	}
+
+	if err := killMountProcess(); err != nil {
+		out.T(out.WarningType, "Unable to kill mount process: {{.error}}", out.V{"error": err})
+	}
+
+	machineName := pkg_config.GetMachineName()
+	err = kubeconfig.UnsetCurrentContext(machineName, constants.KubeconfigPath)
+	if err != nil {
+		exit.WithError("update config", err)
+	}
 }

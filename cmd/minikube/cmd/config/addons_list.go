@@ -17,18 +17,20 @@ limitations under the License.
 package config
 
 import (
-	"fmt"
 	"os"
+	"sort"
 	"text/template"
 
-	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 	"k8s.io/minikube/pkg/minikube/assets"
-	"k8s.io/minikube/pkg/minikube/constants"
+	"k8s.io/minikube/pkg/minikube/exit"
 )
+
+const defaultAddonListFormat = "- {{.AddonName}}: {{.AddonStatus}}\n"
 
 var addonListFormat string
 
+// AddonListTemplate represents the addon list template
 type AddonListTemplate struct {
 	AddonName   string
 	AddonStatus string
@@ -40,19 +42,17 @@ var addonsListCmd = &cobra.Command{
 	Long:  "Lists all available minikube addons as well as their current statuses (enabled/disabled)",
 	Run: func(cmd *cobra.Command, args []string) {
 		if len(args) != 0 {
-			fmt.Fprintln(os.Stderr, "usage: minikube addons list")
-			os.Exit(1)
+			exit.UsageT("usage: minikube addons list")
 		}
 		err := addonList()
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			exit.WithError("addon list failed", err)
 		}
 	},
 }
 
 func init() {
-	AddonsCmd.Flags().StringVar(&addonListFormat, "format", constants.DefaultAddonListFormat,
+	AddonsCmd.Flags().StringVar(&addonListFormat, "format", defaultAddonListFormat,
 		`Go template format string for the addon list output.  The format for Go templates can be found here: https://golang.org/pkg/text/template/
 For the list of accessible variables for the template, see the struct values here: https://godoc.org/k8s.io/minikube/cmd/minikube/cmd/config#AddonListTemplate`)
 	AddonsCmd.AddCommand(addonsListCmd)
@@ -66,21 +66,26 @@ func stringFromStatus(addonStatus bool) string {
 }
 
 func addonList() error {
-	for addonName, addonBundle := range assets.Addons {
+	addonNames := make([]string, 0, len(assets.Addons))
+	for addonName := range assets.Addons {
+		addonNames = append(addonNames, addonName)
+	}
+	sort.Strings(addonNames)
+
+	for _, addonName := range addonNames {
+		addonBundle := assets.Addons[addonName]
 		addonStatus, err := addonBundle.IsEnabled()
 		if err != nil {
 			return err
 		}
 		tmpl, err := template.New("list").Parse(addonListFormat)
 		if err != nil {
-			glog.Errorln("Error creating list template:", err)
-			os.Exit(1)
+			exit.WithError("Error creating list template", err)
 		}
 		listTmplt := AddonListTemplate{addonName, stringFromStatus(addonStatus)}
 		err = tmpl.Execute(os.Stdout, listTmplt)
 		if err != nil {
-			glog.Errorln("Error executing list template:", err)
-			os.Exit(1)
+			exit.WithError("Error executing list template", err)
 		}
 	}
 	return nil

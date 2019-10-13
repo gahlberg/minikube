@@ -1,3 +1,5 @@
+// +build linux
+
 /*
 Copyright 2016 The Kubernetes Authors All rights reserved.
 
@@ -36,7 +38,13 @@ const domainTmpl = `
     <acpi/>
     <apic/>
     <pae/>
+    {{if .Hidden}}
+    <kvm>
+      <hidden state='on'/>
+    </kvm>
+    {{end}}
   </features>
+  <cpu mode='host-passthrough'/>
   <os>
     <type>hvm</type>
     <boot dev='cdrom'/>
@@ -61,46 +69,23 @@ const domainTmpl = `
     </interface>
     <interface type='network'>
       <source network='{{.PrivateNetwork}}'/>
-      <mac address='{{.MAC}}'/>
+      <mac address='{{.PrivateMAC}}'/>
       <model type='virtio'/>
     </interface>
     <serial type='pty'>
-      <source path='/dev/pts/2'/>
       <target port='0'/>
     </serial>
-    <console type='pty' tty='/dev/pts/2'>
-      <source path='/dev/pts/2'/>
-      <target port='0'/>
+    <console type='pty'>
+      <target type='serial' port='0'/>
     </console>
     <rng model='virtio'>
       <backend model='random'>/dev/random</backend>
     </rng>
+    {{if .GPU}}
+    {{.DevicesXML}}
+    {{end}}
   </devices>
 </domain>
-`
-
-const connectionErrorText = `
-Error connecting to libvirt socket.  Have you set up libvirt correctly?
-
-# Install libvirt and qemu-kvm on your system, e.g.
-# Debian/Ubuntu
-$ sudo apt install libvirt-bin qemu-kvm
-# Fedora/CentOS/RHEL
-$ sudo yum install libvirt-daemon-kvm qemu-kvm
-
-# Add yourself to the libvirtd group (use libvirt group for rpm based distros) so you don't need to sudo
-# Debian/Ubuntu (NOTE: For Ubuntu 17.04 change the group to libvirt)
-$ sudo usermod -a -G libvirtd $(whoami)
-# Fedora/CentOS/RHEL
-$ sudo usermod -a -G libvirt $(whoami)
-
-# Update your current session for the group change to take effect
-# Debian/Ubuntu (NOTE: For Ubuntu 17.04 change the group to libvirt)
-$ newgrp libvirtd
-# Fedora/CentOS/RHEL
-$ newgrp libvirt
-
-Visit https://github.com/kubernetes/minikube/blob/master/docs/drivers.md#kvm-driver for more information.
 `
 
 func randomMAC() (net.HardwareAddr, error) {
@@ -118,12 +103,12 @@ func randomMAC() (net.HardwareAddr, error) {
 	// The second LSB of the first octet
 	// 0 for universally administered addresses
 	// 1 for locally administered addresses
-	buf[0] = buf[0] & 0xfc
+	buf[0] &= 0xfc
 	return buf, nil
 }
 
 func (d *Driver) getDomain() (*libvirt.Domain, *libvirt.Connect, error) {
-	conn, err := getConnection()
+	conn, err := getConnection(d.ConnectionURI)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "getting domain")
 	}
@@ -136,39 +121,61 @@ func (d *Driver) getDomain() (*libvirt.Domain, *libvirt.Connect, error) {
 	return dom, conn, nil
 }
 
-func getConnection() (*libvirt.Connect, error) {
-	conn, err := libvirt.NewConnect(qemusystem)
+func getConnection(connectionURI string) (*libvirt.Connect, error) {
+	conn, err := libvirt.NewConnect(connectionURI)
 	if err != nil {
-		return nil, errors.Wrap(err, connectionErrorText)
+		return nil, errors.Wrap(err, "error connecting to libvirt socket.")
 	}
 
 	return conn, nil
 }
 
 func closeDomain(dom *libvirt.Domain, conn *libvirt.Connect) error {
-	dom.Free()
-	if res, _ := conn.Close(); res != 0 {
-		return fmt.Errorf("Error closing connection CloseConnection() == %d, expected 0", res)
+	if err := dom.Free(); err != nil {
+		return err
 	}
-	return nil
+	res, err := conn.Close()
+	if res != 0 {
+		return fmt.Errorf("conn.Close() == %d, expected 0", res)
+	}
+	return err
 }
 
 func (d *Driver) createDomain() (*libvirt.Domain, error) {
+	// create random MAC addresses first for our NICs
+	if d.MAC == "" {
+		mac, err := randomMAC()
+		if err != nil {
+			return nil, errors.Wrap(err, "generating mac address")
+		}
+		d.MAC = mac.String()
+	}
+
+	if d.PrivateMAC == "" {
+		mac, err := randomMAC()
+		if err != nil {
+			return nil, errors.Wrap(err, "generating mac address")
+		}
+		d.PrivateMAC = mac.String()
+	}
+
+	// create the XML for the domain using our domainTmpl template
 	tmpl := template.Must(template.New("domain").Parse(domainTmpl))
-	var domainXml bytes.Buffer
-	if err := tmpl.Execute(&domainXml, d); err != nil {
+	var domainXML bytes.Buffer
+	if err := tmpl.Execute(&domainXML, d); err != nil {
 		return nil, errors.Wrap(err, "executing domain xml")
 	}
 
-	conn, err := getConnection()
+	conn, err := getConnection(d.ConnectionURI)
 	if err != nil {
-		return nil, errors.Wrap(err, "Error getting libvirt connection")
+		return nil, errors.Wrap(err, "error getting libvirt connection")
 	}
 	defer conn.Close()
 
-	dom, err := conn.DomainDefineXML(domainXml.String())
+	// define the domain in libvirt using the generated XML
+	dom, err := conn.DomainDefineXML(domainXML.String())
 	if err != nil {
-		return nil, errors.Wrapf(err, "Error defining domain xml: %s", domainXml.String())
+		return nil, errors.Wrapf(err, "error defining domain xml: %s", domainXML.String())
 	}
 
 	return dom, nil

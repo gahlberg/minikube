@@ -21,25 +21,46 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 
 	"github.com/spf13/viper"
 	"k8s.io/minikube/pkg/minikube/constants"
+	"k8s.io/minikube/pkg/minikube/localpath"
 )
 
 const (
-	WantUpdateNotification    = "WantUpdateNotification"
+	// WantUpdateNotification is the key for WantUpdateNotification
+	WantUpdateNotification = "WantUpdateNotification"
+	// ReminderWaitPeriodInHours is the key for WantUpdateNotification
 	ReminderWaitPeriodInHours = "ReminderWaitPeriodInHours"
-	WantReportError           = "WantReportError"
-	WantReportErrorPrompt     = "WantReportErrorPrompt"
-	WantKubectlDownloadMsg    = "WantKubectlDownloadMsg"
-	MachineProfile            = "profile"
+	// WantReportError is the key for WantReportError
+	WantReportError = "WantReportError"
+	// WantReportErrorPrompt is the key for WantReportErrorPrompt
+	WantReportErrorPrompt = "WantReportErrorPrompt"
+	// WantKubectlDownloadMsg is the key for WantKubectlDownloadMsg
+	WantKubectlDownloadMsg = "WantKubectlDownloadMsg"
+	// WantNoneDriverWarning is the key for WantNoneDriverWarning
+	WantNoneDriverWarning = "WantNoneDriverWarning"
+	// MachineProfile is the key for MachineProfile
+	MachineProfile = "profile"
+	// ShowDriverDeprecationNotification is the key for ShowDriverDeprecationNotification
+	ShowDriverDeprecationNotification = "ShowDriverDeprecationNotification"
+	// ShowBootstrapperDeprecationNotification is the key for ShowBootstrapperDeprecationNotification
+	ShowBootstrapperDeprecationNotification = "ShowBootstrapperDeprecationNotification"
 )
 
+var (
+	// ErrKeyNotFound is the error returned when a key doesn't exist in the config file
+	ErrKeyNotFound = errors.New("specified key could not be found in config")
+)
+
+// MinikubeConfig represents minikube config
 type MinikubeConfig map[string]interface{}
 
+// Get gets a named value from config
 func Get(name string) (string, error) {
-	m, err := ReadConfig()
+	m, err := ReadConfig(localpath.ConfigFile)
 	if err != nil {
 		return "", err
 	}
@@ -50,21 +71,37 @@ func get(name string, config MinikubeConfig) (string, error) {
 	if val, ok := config[name]; ok {
 		return fmt.Sprintf("%v", val), nil
 	}
-	return "", errors.New("specified key could not be found in config")
+	return "", ErrKeyNotFound
+}
+
+// WriteConfig writes a minikube config to the JSON file
+func WriteConfig(configFile string, m MinikubeConfig) error {
+	f, err := os.Create(configFile)
+	if err != nil {
+		return fmt.Errorf("create %s: %s", configFile, err)
+	}
+	defer f.Close()
+	err = encode(f, m)
+	if err != nil {
+		return fmt.Errorf("encode %s: %s", configFile, err)
+	}
+	return nil
 }
 
 // ReadConfig reads in the JSON minikube config
-func ReadConfig() (MinikubeConfig, error) {
-	f, err := os.Open(constants.ConfigFile)
+func ReadConfig(configFile string) (MinikubeConfig, error) {
+	f, err := os.Open(configFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return make(map[string]interface{}), nil
 		}
-		return nil, fmt.Errorf("Could not open file %s: %s", constants.ConfigFile, err)
+		return nil, fmt.Errorf("open %s: %v", localpath.ConfigFile, err)
 	}
+	defer f.Close()
+
 	m, err := decode(f)
 	if err != nil {
-		return nil, fmt.Errorf("Could not decode config %s: %s", constants.ConfigFile, err)
+		return nil, fmt.Errorf("decode %s: %v", localpath.ConfigFile, err)
 	}
 
 	return m, nil
@@ -76,10 +113,57 @@ func decode(r io.Reader) (MinikubeConfig, error) {
 	return data, err
 }
 
+func encode(w io.Writer, m MinikubeConfig) error {
+	b, err := json.MarshalIndent(m, "", "    ")
+	if err != nil {
+		return err
+	}
+
+	_, err = w.Write(b)
+
+	return err
+}
+
 // GetMachineName gets the machine name for the VM
 func GetMachineName() string {
+	// REFACTOR NECESSARY: This function should not rely on globals.
 	if viper.GetString(MachineProfile) == "" {
 		return constants.DefaultMachineName
 	}
 	return viper.GetString(MachineProfile)
+}
+
+// Load loads the kubernetes and machine config for the current machine
+func Load() (*Config, error) {
+	return DefaultLoader.LoadConfigFromFile(GetMachineName())
+}
+
+// Loader loads the kubernetes and machine config based on the machine profile name
+type Loader interface {
+	LoadConfigFromFile(profile string, miniHome ...string) (*Config, error)
+}
+
+type simpleConfigLoader struct{}
+
+// DefaultLoader is the default config loader
+var DefaultLoader Loader = &simpleConfigLoader{}
+
+func (c *simpleConfigLoader) LoadConfigFromFile(profileName string, miniHome ...string) (*Config, error) {
+	var cc Config
+	// Move to profile package
+	path := profileFilePath(profileName, miniHome...)
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil, err
+	}
+
+	data, err := ioutil.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := json.Unmarshal(data, &cc); err != nil {
+		return nil, err
+	}
+	return &cc, nil
 }

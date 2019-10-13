@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"strings"
 	"text/template"
 	"time"
 
@@ -36,14 +37,20 @@ import (
 	"github.com/docker/machine/libmachine/swarm"
 	"github.com/pkg/errors"
 	"k8s.io/minikube/pkg/minikube/assets"
-	"k8s.io/minikube/pkg/minikube/bootstrapper"
+	"k8s.io/minikube/pkg/minikube/command"
+	"k8s.io/minikube/pkg/minikube/config"
 	"k8s.io/minikube/pkg/minikube/sshutil"
 	"k8s.io/minikube/pkg/util"
+	"k8s.io/minikube/pkg/util/retry"
 )
 
+// BuildrootProvisioner provisions the custom system based on Buildroot
 type BuildrootProvisioner struct {
 	provision.SystemdProvisioner
 }
+
+// for escaping systemd template specifiers (e.g. '%i'), which are not supported by minikube
+var systemdSpecifierEscaper = strings.NewReplacer("%", "%%")
 
 func init() {
 	provision.Register("Buildroot", &provision.RegisteredProvisioner{
@@ -51,6 +58,7 @@ func init() {
 	})
 }
 
+// NewBuildrootProvisioner creates a new BuildrootProvisioner
 func NewBuildrootProvisioner(d drivers.Driver) provision.Provisioner {
 	return &BuildrootProvisioner{
 		provision.NewSystemdProvisioner("buildroot", d),
@@ -61,23 +69,54 @@ func (p *BuildrootProvisioner) String() string {
 	return "buildroot"
 }
 
+// CompatibleWithHost checks if provisioner is compatible with host
+func (p *BuildrootProvisioner) CompatibleWithHost() bool {
+	return p.OsReleaseInfo.ID == "buildroot"
+}
+
+// escapeSystemdDirectives escapes special characters in the input variables used to create the
+// systemd unit file, which would otherwise be interpreted as systemd directives. An example
+// are template specifiers (e.g. '%i') which are predefined variables that get evaluated dynamically
+// (see systemd man pages for more info). This is not supported by minikube, thus needs to be escaped.
+func escapeSystemdDirectives(engineConfigContext *provision.EngineConfigContext) {
+	// escape '%' in Environment option so that it does not evaluate into a template specifier
+	engineConfigContext.EngineOptions.Env = util.ReplaceChars(engineConfigContext.EngineOptions.Env, systemdSpecifierEscaper)
+	// input might contain whitespaces, wrap it in quotes
+	engineConfigContext.EngineOptions.Env = util.ConcatStrings(engineConfigContext.EngineOptions.Env, "\"", "\"")
+}
+
+// GenerateDockerOptions generates the *provision.DockerOptions for this provisioner
 func (p *BuildrootProvisioner) GenerateDockerOptions(dockerPort int) (*provision.DockerOptions, error) {
 	var engineCfg bytes.Buffer
 
 	driverNameLabel := fmt.Sprintf("provider=%s", p.Driver.DriverName())
 	p.EngineOptions.Labels = append(p.EngineOptions.Labels, driverNameLabel)
 
+	noPivot := true
+	// Using pivot_root is not supported on fstype rootfs
+	if fstype, err := rootFileSystemType(p); err == nil {
+		log.Debugf("root file system type: %s", fstype)
+		noPivot = fstype == "rootfs"
+	}
+
 	engineConfigTmpl := `[Unit]
 Description=Docker Application Container Engine
 Documentation=https://docs.docker.com
-After=network.target docker.socket
-Requires=docker.socket
+After=network.target  minikube-automount.service docker.socket
+Requires= minikube-automount.service docker.socket 
 
 [Service]
 Type=notify
 
+`
+	if noPivot {
+		log.Warn("Using fundamentally insecure --no-pivot option")
+		engineConfigTmpl += `
 # DOCKER_RAMDISK disables pivot_root in Docker, using MS_MOVE instead.
 Environment=DOCKER_RAMDISK=yes
+`
+	}
+	engineConfigTmpl += `
 {{range .EngineOptions.Env}}Environment={{.}}
 {{end}}
 
@@ -123,6 +162,8 @@ WantedBy=multi-user.target
 		EngineOptions: p.EngineOptions,
 	}
 
+	escapeSystemdDirectives(&engineConfigContext)
+
 	if err := t.Execute(&engineCfg, engineConfigContext); err != nil {
 		return nil, err
 	}
@@ -133,10 +174,20 @@ WantedBy=multi-user.target
 	}, nil
 }
 
+func rootFileSystemType(p *BuildrootProvisioner) (string, error) {
+	fs, err := p.SSHCommand("df --output=fstype / | tail -n 1")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(fs), nil
+}
+
+// Package installs a package
 func (p *BuildrootProvisioner) Package(name string, action pkgaction.PackageAction) error {
 	return nil
 }
 
+// Provision does the provisioning
 func (p *BuildrootProvisioner) Provision(swarmOptions swarm.Options, authOptions auth.Options, engineOptions engine.Options) error {
 	p.SwarmOptions = swarmOptions
 	p.AuthOptions = authOptions
@@ -151,13 +202,14 @@ func (p *BuildrootProvisioner) Provision(swarmOptions swarm.Options, authOptions
 	log.Debugf("set auth options %+v", p.AuthOptions)
 
 	log.Debugf("setting up certificates")
-	configureAuth := func() error {
+	configAuth := func() error {
 		if err := configureAuth(p); err != nil {
-			return &util.RetriableError{Err: err}
+			return &retry.RetriableError{Err: err}
 		}
 		return nil
 	}
-	err := util.RetryAfter(5, configureAuth, time.Second*10)
+
+	err := retry.Expo(configAuth, time.Second, 2*time.Minute)
 	if err != nil {
 		log.Debugf("Error configuring auth during provisioning %v", err)
 		return err
@@ -201,12 +253,14 @@ CRIO_MINIKUBE_OPTIONS='{{ range .EngineOptions.InsecureRegistry }}--insecure-reg
 	if err := t.Execute(&crioOptsBuf, p); err != nil {
 		return err
 	}
+
 	if _, err = p.SSHCommand(fmt.Sprintf("sudo mkdir -p %s && printf %%s \"%s\" | sudo tee %s", path.Dir(crioOptsPath), crioOptsBuf.String(), crioOptsPath)); err != nil {
 		return err
 	}
 
+	// This is unlikely to cause issues unless the user has explicitly requested CRIO, so just log a warning.
 	if err := p.Service("crio", serviceaction.Restart); err != nil {
-		return err
+		log.Warn("Unable to restart crio service. Error: %v", err)
 	}
 
 	return nil
@@ -224,21 +278,9 @@ func configureAuth(p *BuildrootProvisioner) error {
 		return errors.Wrap(err, "error getting ip during provisioning")
 	}
 
-	execRunner := &bootstrapper.ExecRunner{}
-	hostCerts := map[string]string{
-		authOptions.CaCertPath:     path.Join(authOptions.StorePath, "ca.pem"),
-		authOptions.ClientCertPath: path.Join(authOptions.StorePath, "cert.pem"),
-		authOptions.ClientKeyPath:  path.Join(authOptions.StorePath, "key.pem"),
-	}
-
-	for src, dst := range hostCerts {
-		f, err := assets.NewFileAsset(src, path.Dir(dst), filepath.Base(dst), "0777")
-		if err != nil {
-			return errors.Wrapf(err, "open cert file: %s", src)
-		}
-		if err := execRunner.Copy(f); err != nil {
-			return errors.Wrapf(err, "transferring file: %+v", f)
-		}
+	err = copyHostCerts(authOptions)
+	if err != nil {
+		return err
 	}
 
 	// The Host IP is always added to the certificate's SANs list
@@ -262,28 +304,17 @@ func configureAuth(p *BuildrootProvisioner) error {
 	})
 
 	if err != nil {
-		return fmt.Errorf("error generating server cert: %s", err)
+		return fmt.Errorf("error generating server cert: %v", err)
 	}
 
-	remoteCerts := map[string]string{
-		authOptions.CaCertPath:     authOptions.CaCertRemotePath,
-		authOptions.ServerCertPath: authOptions.ServerCertRemotePath,
-		authOptions.ServerKeyPath:  authOptions.ServerKeyRemotePath,
-	}
-
-	sshClient, err := sshutil.NewSSHClient(driver)
+	err = copyRemoteCerts(authOptions, driver)
 	if err != nil {
-		return errors.Wrap(err, "provisioning: error getting ssh client")
+		return err
 	}
-	sshRunner := bootstrapper.NewSSHRunner(sshClient)
-	for src, dst := range remoteCerts {
-		f, err := assets.NewFileAsset(src, path.Dir(dst), filepath.Base(dst), "0640")
-		if err != nil {
-			return errors.Wrapf(err, "error copying %s to %s", src, dst)
-		}
-		if err := sshRunner.Copy(f); err != nil {
-			return errors.Wrapf(err, "transfering file to machine %v", f)
-		}
+
+	config, err := config.Load()
+	if err != nil {
+		return errors.Wrap(err, "getting cluster config")
 	}
 
 	dockerCfg, err := p.GenerateDockerOptions(engine.DefaultPort)
@@ -297,8 +328,61 @@ func configureAuth(p *BuildrootProvisioner) error {
 		return err
 	}
 
-	if err := p.Service("docker", serviceaction.Restart); err != nil {
-		return err
+	if config.MachineConfig.ContainerRuntime == "" {
+
+		if err := p.Service("docker", serviceaction.Enable); err != nil {
+			return err
+		}
+
+		if err := p.Service("docker", serviceaction.Restart); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func copyHostCerts(authOptions auth.Options) error {
+	execRunner := &command.ExecRunner{}
+	hostCerts := map[string]string{
+		authOptions.CaCertPath:     path.Join(authOptions.StorePath, "ca.pem"),
+		authOptions.ClientCertPath: path.Join(authOptions.StorePath, "cert.pem"),
+		authOptions.ClientKeyPath:  path.Join(authOptions.StorePath, "key.pem"),
+	}
+
+	for src, dst := range hostCerts {
+		f, err := assets.NewFileAsset(src, path.Dir(dst), filepath.Base(dst), "0777")
+		if err != nil {
+			return errors.Wrapf(err, "open cert file: %s", src)
+		}
+		if err := execRunner.Copy(f); err != nil {
+			return errors.Wrapf(err, "transferring file: %+v", f)
+		}
+	}
+
+	return nil
+}
+
+func copyRemoteCerts(authOptions auth.Options, driver drivers.Driver) error {
+	remoteCerts := map[string]string{
+		authOptions.CaCertPath:     authOptions.CaCertRemotePath,
+		authOptions.ServerCertPath: authOptions.ServerCertRemotePath,
+		authOptions.ServerKeyPath:  authOptions.ServerKeyRemotePath,
+	}
+
+	sshClient, err := sshutil.NewSSHClient(driver)
+	if err != nil {
+		return errors.Wrap(err, "provisioning: error getting ssh client")
+	}
+	sshRunner := command.NewSSHRunner(sshClient)
+	for src, dst := range remoteCerts {
+		f, err := assets.NewFileAsset(src, path.Dir(dst), filepath.Base(dst), "0640")
+		if err != nil {
+			return errors.Wrapf(err, "error copying %s to %s", src, dst)
+		}
+		if err := sshRunner.Copy(f); err != nil {
+			return errors.Wrapf(err, "transferring file to machine %v", f)
+		}
 	}
 
 	return nil

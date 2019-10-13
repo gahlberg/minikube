@@ -17,13 +17,12 @@ limitations under the License.
 package config
 
 import (
-	"fmt"
 	"io/ioutil"
-	"os"
-
-	"k8s.io/minikube/pkg/minikube/service"
 
 	"github.com/spf13/cobra"
+	"k8s.io/minikube/pkg/minikube/exit"
+	"k8s.io/minikube/pkg/minikube/out"
+	"k8s.io/minikube/pkg/minikube/service"
 )
 
 var addonsConfigureCmd = &cobra.Command{
@@ -32,8 +31,7 @@ var addonsConfigureCmd = &cobra.Command{
 	Long:  "Configures the addon w/ADDON_NAME within minikube (example: minikube addons configure registry-creds). For a list of available addons use: minikube addons list ",
 	Run: func(cmd *cobra.Command, args []string) {
 		if len(args) != 1 {
-			fmt.Fprintln(os.Stderr, "usage: minikube addons configure ADDON_NAME")
-			os.Exit(1)
+			exit.UsageT("usage: minikube addons configure ADDON_NAME")
 		}
 
 		addon := args[0]
@@ -62,7 +60,7 @@ var addonsConfigureCmd = &cobra.Command{
 				awsAccessKey = AskForStaticValue("-- Enter AWS Secret Access Key: ")
 				awsSessionToken = AskForStaticValueOptional("-- (Optional) Enter AWS Session Token: ")
 				awsRegion = AskForStaticValue("-- Enter AWS Region: ")
-				awsAccount = AskForStaticValue("-- Enter 12 digit AWS Account ID: ")
+				awsAccount = AskForStaticValue("-- Enter 12 digit AWS Account ID (Comma separated list): ")
 				awsRole = AskForStaticValueOptional("-- (Optional) Enter ARN of AWS role to assume: ")
 			}
 
@@ -79,7 +77,7 @@ var addonsConfigureCmd = &cobra.Command{
 				dat, err := ioutil.ReadFile(gcrPath)
 
 				if err != nil {
-					fmt.Println("Could not read file for application_default_credentials.json")
+					out.FailureT("Error reading {{.path}}: {{.error}}", out.V{"path": gcrPath, "error": err})
 				} else {
 					gcrApplicationDefaultCredentials = string(dat)
 				}
@@ -105,13 +103,13 @@ var addonsConfigureCmd = &cobra.Command{
 					"aws-assume-role":       awsRole,
 				},
 				map[string]string{
-					"app":   "registry-creds",
-					"cloud": "ecr",
+					"app":                           "registry-creds",
+					"cloud":                         "ecr",
 					"kubernetes.io/minikube-addons": "registry-creds",
 				})
 
 			if err != nil {
-				fmt.Println("ERROR creating `registry-creds-ecr` secret")
+				out.FailureT("ERROR creating `registry-creds-ecr` secret: {{.error}}", out.V{"error": err})
 			}
 
 			// Create GCR Secret
@@ -120,16 +118,16 @@ var addonsConfigureCmd = &cobra.Command{
 				"registry-creds-gcr",
 				map[string]string{
 					"application_default_credentials.json": gcrApplicationDefaultCredentials,
-					"gcrurl": gcrURL,
+					"gcrurl":                               gcrURL,
 				},
 				map[string]string{
-					"app":   "registry-creds",
-					"cloud": "gcr",
+					"app":                           "registry-creds",
+					"cloud":                         "gcr",
 					"kubernetes.io/minikube-addons": "registry-creds",
 				})
 
 			if err != nil {
-				fmt.Println("ERROR creating `registry-creds-gcr` secret")
+				out.FailureT("ERROR creating `registry-creds-gcr` secret: {{.error}}", out.V{"error": err})
 			}
 
 			// Create Docker Secret
@@ -142,22 +140,20 @@ var addonsConfigureCmd = &cobra.Command{
 					"DOCKER_PRIVATE_REGISTRY_PASSWORD": dockerPass,
 				},
 				map[string]string{
-					"app":   "registry-creds",
-					"cloud": "dpr",
+					"app":                           "registry-creds",
+					"cloud":                         "dpr",
 					"kubernetes.io/minikube-addons": "registry-creds",
 				})
 
 			if err != nil {
-				fmt.Println("ERROR creating `registry-creds-dpr` secret")
+				out.WarningT("ERROR creating `registry-creds-dpr` secret")
 			}
-
-			break
 		default:
-			fmt.Fprintln(os.Stdout, fmt.Sprintf("%s has no available configuration options", addon))
+			out.FailureT("{{.name}} has no available configuration options", out.V{"name": addon})
 			return
 		}
 
-		fmt.Fprintln(os.Stdout, fmt.Sprintf("%s was successfully configured", addon))
+		out.SuccessT("{{.name}} was successfully configured", out.V{"name": addon})
 	},
 }
 

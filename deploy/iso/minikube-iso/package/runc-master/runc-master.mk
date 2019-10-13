@@ -4,8 +4,10 @@
 #
 ################################################################################
 
-RUNC_MASTER_VERSION = 593914b8bd5448a93f7c3e4902a03408b6d5c0ce
-RUNC_MASTER_SITE = $(call github,opencontainers,runc,$(RUNC_MASTER_VERSION))
+# HEAD as of 2019-04-25
+RUNC_MASTER_VERSION = 425e105d5a03fabd737a126ad93d62a9eeede87f
+RUNC_MASTER_SITE = https://github.com/opencontainers/runc/archive
+RUNC_MASTER_SOURCE = $(RUNC_MASTER_VERSION).tar.gz
 RUNC_MASTER_LICENSE = Apache-2.0
 RUNC_MASTER_LICENSE_FILES = LICENSE
 
@@ -20,12 +22,6 @@ RUNC_MASTER_MAKE_ENV = $(HOST_GO_TARGET_ENV) \
 
 RUNC_MASTER_GLDFLAGS = \
 	-buildmode=pie -X main.gitCommit=$(RUNC_MASTER_VERSION)
-
-ifeq ($(BR2_STATIC_LIBS),y)
-RUNC_MASTER_GLDFLAGS += -extldflags '-static'
-endif
-
-RUNC_MASTER_GOTAGS = cgo static_build
 
 ifeq ($(BR2_PACKAGE_LIBSECCOMP),y)
 RUNC_MASTER_GOTAGS += seccomp

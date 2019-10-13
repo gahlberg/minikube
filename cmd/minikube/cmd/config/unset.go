@@ -17,12 +17,10 @@ limitations under the License.
 package config
 
 import (
-	"fmt"
-	"os"
-
-	pkgConfig "k8s.io/minikube/pkg/minikube/config"
-
 	"github.com/spf13/cobra"
+	pkgConfig "k8s.io/minikube/pkg/minikube/config"
+	"k8s.io/minikube/pkg/minikube/exit"
+	"k8s.io/minikube/pkg/minikube/localpath"
 )
 
 var configUnsetCmd = &cobra.Command{
@@ -31,12 +29,11 @@ var configUnsetCmd = &cobra.Command{
 	Long:  "unsets PROPERTY_NAME from the minikube config file.  Can be overwritten by flags or environmental variables",
 	Run: func(cmd *cobra.Command, args []string) {
 		if len(args) != 1 {
-			fmt.Fprintln(os.Stdout, "usage: minikube config unset PROPERTY_NAME")
-			os.Exit(1)
+			exit.UsageT("usage: minikube config unset PROPERTY_NAME")
 		}
-		err := unset(args[0])
+		err := Unset(args[0])
 		if err != nil {
-			fmt.Fprintln(os.Stdout, err)
+			exit.WithError("unset failed", err)
 		}
 	},
 }
@@ -45,11 +42,12 @@ func init() {
 	ConfigCmd.AddCommand(configUnsetCmd)
 }
 
-func unset(name string) error {
-	m, err := pkgConfig.ReadConfig()
+// Unset unsets a property
+func Unset(name string) error {
+	m, err := pkgConfig.ReadConfig(localpath.ConfigFile)
 	if err != nil {
 		return err
 	}
 	delete(m, name)
-	return WriteConfig(m)
+	return pkgConfig.WriteConfig(localpath.ConfigFile, m)
 }

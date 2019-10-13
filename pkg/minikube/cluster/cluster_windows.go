@@ -22,25 +22,10 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/docker/machine/drivers/hyperv"
-	"github.com/docker/machine/libmachine/drivers"
 	"github.com/golang/glog"
 	"github.com/pkg/errors"
 	"golang.org/x/sys/windows/registry"
-	cfg "k8s.io/minikube/pkg/minikube/config"
-	"k8s.io/minikube/pkg/minikube/constants"
 )
-
-func createHypervHost(config MachineConfig) drivers.Driver {
-	d := hyperv.NewDriver(cfg.GetMachineName(), constants.GetMinipath())
-	d.Boot2DockerURL = config.Downloader.GetISOFileURI(config.MinikubeISO)
-	d.VSwitch = config.HypervVirtualSwitch
-	d.MemSize = config.Memory
-	d.CPU = config.CPUs
-	d.DiskSize = int(config.DiskSize)
-	d.SSHUser = "docker"
-	return d
-}
 
 func detectVBoxManageCmd() string {
 	cmd := "VBoxManage"
@@ -77,7 +62,7 @@ func detectVBoxManageCmd() string {
 func findVBoxInstallDirInRegistry() (string, error) {
 	registryKey, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Oracle\VirtualBox`, registry.QUERY_VALUE)
 	if err != nil {
-		errorMessage := fmt.Sprintf("Can't find VirtualBox registry entries, is VirtualBox really installed properly? %s", err)
+		errorMessage := fmt.Sprintf("Can't find VirtualBox registry entries, is VirtualBox really installed properly? %v", err)
 		glog.Errorf(errorMessage)
 		return "", errors.New(errorMessage)
 	}
@@ -86,7 +71,7 @@ func findVBoxInstallDirInRegistry() (string, error) {
 
 	installDir, _, err := registryKey.GetStringValue("InstallDir")
 	if err != nil {
-		errorMessage := fmt.Sprintf("Can't find InstallDir registry key within VirtualBox registries entries, is VirtualBox really installed properly? %s", err)
+		errorMessage := fmt.Sprintf("Can't find InstallDir registry key within VirtualBox registries entries, is VirtualBox really installed properly? %v", err)
 		glog.Errorf(errorMessage)
 		return "", errors.New(errorMessage)
 	}

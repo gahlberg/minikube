@@ -17,17 +17,14 @@ limitations under the License.
 package cmd
 
 import (
-	"fmt"
-	"os"
-
-	"github.com/golang/glog"
 	"github.com/spf13/cobra"
-	cmdUtil "k8s.io/minikube/cmd/util"
 	"k8s.io/minikube/pkg/minikube/cluster"
 	"k8s.io/minikube/pkg/minikube/config"
 	"k8s.io/minikube/pkg/minikube/constants"
+	"k8s.io/minikube/pkg/minikube/exit"
+	"k8s.io/minikube/pkg/minikube/kubeconfig"
 	"k8s.io/minikube/pkg/minikube/machine"
-	kcfg "k8s.io/minikube/pkg/util/kubeconfig"
+	"k8s.io/minikube/pkg/minikube/out"
 )
 
 // updateContextCmd represents the update-context command
@@ -39,29 +36,23 @@ var updateContextCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		api, err := machine.NewAPIClient()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error getting client: %s\n", err)
-			os.Exit(1)
+			exit.WithError("Error getting client", err)
 		}
 		defer api.Close()
-		ip, err := cluster.GetHostDriverIP(api)
+		machineName := config.GetMachineName()
+		ip, err := cluster.GetHostDriverIP(api, machineName)
 		if err != nil {
-			glog.Errorln("Error host driver ip status:", err)
-			cmdUtil.MaybeReportErrorAndExit(err)
+			exit.WithError("Error host driver ip status", err)
 		}
-		kstatus, err := kcfg.UpdateKubeconfigIP(ip, constants.KubeconfigPath, config.GetMachineName())
+		updated, err := kubeconfig.UpdateIP(ip, constants.KubeconfigPath, machineName)
 		if err != nil {
-			glog.Errorln("Error kubeconfig status:", err)
-			cmdUtil.MaybeReportErrorAndExit(err)
+			exit.WithError("update config", err)
 		}
-		if kstatus {
-			fmt.Println("Reconfigured kubeconfig IP, now pointing at " + ip.String())
+		if updated {
+			out.T(out.Celebrate, "{{.machine}} IP has been updated to point at {{.ip}}", out.V{"machine": machineName, "ip": ip})
 		} else {
-			fmt.Println("Kubeconfig IP correctly configured, pointing at " + ip.String())
+			out.T(out.Meh, "{{.machine}} IP was already correctly configured for {{.ip}}", out.V{"machine": machineName, "ip": ip})
 		}
 
 	},
-}
-
-func init() {
-	RootCmd.AddCommand(updateContextCmd)
 }

@@ -17,6 +17,7 @@ limitations under the License.
 package kubeadm
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/blang/semver"
@@ -45,7 +46,7 @@ func TestVersionIsBetween(t *testing.T) {
 			expected:    false,
 		},
 		{
-			description: "greather than max version",
+			description: "greater than max version",
 			ver:         semver.MustParse("2.8.0"),
 			gte:         semver.MustParse("1.7.0"),
 			lte:         semver.MustParse("1.9.0"),
@@ -93,11 +94,55 @@ func TestVersionIsBetween(t *testing.T) {
 }
 
 func TestParseKubernetesVersion(t *testing.T) {
-	version, err := ParseKubernetesVersion("v1.8.0-alpha.5")
+	version, err := parseKubernetesVersion("v1.8.0-alpha.5")
 	if err != nil {
-		t.Fatalf("Error parsing version: %s", err)
+		t.Fatalf("Error parsing version: %v", err)
 	}
 	if version.NE(semver.MustParse("1.8.0-alpha.5")) {
 		t.Errorf("Expected: %s, Actual:%s", "1.8.0-alpha.5", version)
+	}
+}
+
+func TestParseFeatureArgs(t *testing.T) {
+	tests := []struct {
+		description                  string
+		featureGates                 string
+		expectedKubeadmFeatureArgs   map[string]bool
+		expectedComponentFeatureArgs string
+	}{
+		{
+			description:  "CoreDNS enabled",
+			featureGates: "CoreDNS=true",
+			expectedKubeadmFeatureArgs: map[string]bool{
+				"CoreDNS": true,
+			},
+			expectedComponentFeatureArgs: "",
+		},
+		{
+			description:  "CoreDNS disabled",
+			featureGates: "CoreDNS=false",
+			expectedKubeadmFeatureArgs: map[string]bool{
+				"CoreDNS": false,
+			},
+			expectedComponentFeatureArgs: "",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			kubeadm, component, err := ParseFeatureArgs(test.featureGates)
+
+			if err != nil {
+				t.Fatalf("Error parsing feature args: %v", err)
+			}
+
+			if !reflect.DeepEqual(kubeadm, test.expectedKubeadmFeatureArgs) {
+				t.Errorf("Kubeadm Actual: %v, Expected: %v", kubeadm, test.expectedKubeadmFeatureArgs)
+			}
+
+			if !reflect.DeepEqual(component, test.expectedComponentFeatureArgs) {
+				t.Errorf("Component Actual: %v, Expected: %v", component, test.expectedComponentFeatureArgs)
+			}
+		})
 	}
 }

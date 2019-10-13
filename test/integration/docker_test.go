@@ -19,36 +19,48 @@ limitations under the License.
 package integration
 
 import (
-	"fmt"
+	"context"
+	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestDocker(t *testing.T) {
-	minikubeRunner := NewMinikubeRunner(t)
+func TestDockerFlags(t *testing.T) {
+	if NoneDriver() {
+		t.Skip("skipping: none driver does not support ssh or bundle docker")
+	}
+	MaybeSlowParallel(t)
 
-	if strings.Contains(minikubeRunner.StartArgs, "--vm-driver=none") {
-		t.Skip("skipping test as none driver does not bundle docker")
+	profile := UniqueProfileName("docker-flags")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer CleanupWithLogs(t, profile, cancel)
+
+	// Use the most verbose logging for the simplest test. If it fails, something is very wrong.
+	args := append([]string{"start", "-p", profile, "--wait=false", "--docker-env=FOO=BAR", "--docker-env=BAZ=BAT", "--docker-opt=debug", "--docker-opt=icc=true", "--alsologtostderr", "-v=5"}, StartArgs()...)
+	rr, err := Run(t, exec.CommandContext(ctx, Target(), args...))
+	if err != nil {
+		t.Errorf("%s failed: %v", rr.Args, err)
 	}
 
-	minikubeRunner.RunCommand("delete", false)
-	startCmd := fmt.Sprintf("start %s %s %s", minikubeRunner.StartArgs, minikubeRunner.Args, "--docker-env=FOO=BAR --docker-env=BAZ=BAT --docker-opt=debug --docker-opt=icc=true")
-	minikubeRunner.RunCommand(startCmd, true)
-	minikubeRunner.EnsureRunning()
+	rr, err = Run(t, exec.CommandContext(ctx, Target(), "-p", profile, "ssh", "systemctl show docker --property=Environment --no-pager"))
+	if err != nil {
+		t.Errorf("%s failed: %v", rr.Args, err)
+	}
 
-	dockerdEnvironment := minikubeRunner.RunCommand("ssh -- systemctl show docker --property=Environment --no-pager", true)
-	fmt.Println(dockerdEnvironment)
 	for _, envVar := range []string{"FOO=BAR", "BAZ=BAT"} {
-		if !strings.Contains(dockerdEnvironment, envVar) {
-			t.Fatalf("Env var %s missing from Environment: %s.", envVar, dockerdEnvironment)
+		if !strings.Contains(rr.Stdout.String(), envVar) {
+			t.Errorf("env var %s missing: %s.", envVar, rr.Stdout)
 		}
 	}
 
-	dockerdExecStart := minikubeRunner.RunCommand("ssh -- systemctl show docker --property=ExecStart --no-pager", true)
-	fmt.Println(dockerdExecStart)
+	rr, err = Run(t, exec.CommandContext(ctx, Target(), "-p", profile, "ssh", "systemctl show docker --property=ExecStart --no-pager"))
+	if err != nil {
+		t.Errorf("%s failed: %v", rr.Args, err)
+	}
 	for _, opt := range []string{"--debug", "--icc=true"} {
-		if !strings.Contains(dockerdExecStart, opt) {
-			t.Fatalf("Option %s missing from ExecStart: %s.", opt, dockerdExecStart)
+		if !strings.Contains(rr.Stdout.String(), opt) {
+			t.Fatalf("%s = %q, want *%s*", rr.Command(), rr.Stdout, opt)
 		}
 	}
 }

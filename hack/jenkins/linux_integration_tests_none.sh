@@ -15,7 +15,7 @@
 # limitations under the License.
 
 
-# This script runs the integration tests on a Linux machine for the Virtualbox Driver
+# This script runs the integration tests on a Linux machine for the none Driver
 
 # The script expects the following env variables:
 # MINIKUBE_LOCATION: GIT_COMMIT from upstream build.
@@ -28,12 +28,27 @@ set -e
 
 OS_ARCH="linux-amd64"
 VM_DRIVER="none"
-JOB_NAME="Linux-None"
-EXTRA_ARGS="--bootstrapper=localkube"
-EXTRA_START_ARGS="--kubernetes-version=file://$PWD/out/localkube"
+JOB_NAME="none_Linux"
+EXTRA_ARGS="--bootstrapper=kubeadm"
+PARALLEL_COUNT=1
 
 SUDO_PREFIX="sudo -E "
 export KUBECONFIG="/root/.kube/config"
 
+# "none" driver specific cleanup from previous runs.
+
+# Try without -f first, primarily because older kubeadm versions (v1.10) don't support it anyways.
+sudo kubeadm reset || sudo kubeadm reset -f || true
+# Cleanup data directory
+sudo rm -rf /data/*
+# Cleanup old Kubernetes configs
+sudo rm -rf /etc/kubernetes/*
+# Cleanup old minikube files
+sudo rm -rf /var/lib/minikube/*
+# Stop any leftover kubelets
+systemctl is-active --quiet kubelet \
+  && echo "stopping kubelet" \
+  && sudo systemctl stop kubelet
+
 # Download files and set permissions
-source common.sh
+source ./common.sh

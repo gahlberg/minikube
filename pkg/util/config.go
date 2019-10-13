@@ -39,7 +39,7 @@ func findNestedElement(s string, c interface{}) (reflect.Value, error) {
 
 		// FieldByName returns the zero value if the field does not exist.
 		if e == (reflect.Value{}) {
-			return e, fmt.Errorf("Unable to find field by name: %s", field)
+			return e, fmt.Errorf("unable to find field by name: %s", field)
 		}
 		// Start the loop again, on the next level.
 	}
@@ -58,56 +58,63 @@ func setElement(e reflect.Value, v string) error {
 	case bool:
 		return convertBool(e, v)
 	case net.IP:
-		ip := net.ParseIP(v)
-		if ip == nil {
-			return fmt.Errorf("Error converting input %s to an IP.", v)
-		}
-		e.Set(reflect.ValueOf(ip))
+		return convertIP(e, v)
 	case net.IPNet:
-		_, cidr, err := net.ParseCIDR(v)
-		if err != nil {
-			return fmt.Errorf("Error converting input %s to a CIDR: %s", v, err)
-		}
-		e.Set(reflect.ValueOf(*cidr))
+		return convertCIDR(e, v)
 	case utilnet.PortRange:
-		pr, err := utilnet.ParsePortRange(v)
-		if err != nil {
-			return fmt.Errorf("Error converting input %s to PortRange: %s", v, err)
-		}
-		e.Set(reflect.ValueOf(*pr))
+		return convertPortRange(e, v)
 	case time.Duration:
-		dur, err := time.ParseDuration(v)
-		if err != nil {
-			return fmt.Errorf("Error converting input %s to Duration: %s", v, err)
-		}
-		e.Set(reflect.ValueOf(dur))
+		return convertDuration(e, v)
 	case []string:
 		vals := strings.Split(v, ",")
 		e.Set(reflect.ValueOf(vals))
+	case map[string]string:
+		return convertMap(e, v)
 	default:
 		// Last ditch attempt to convert anything based on its underlying kind.
 		// This covers any types that are aliased to a native type
-		switch e.Kind() {
-		case reflect.Int, reflect.Int32, reflect.Int64:
-			return convertInt(e, v)
-		case reflect.String:
-			return convertString(e, v)
-		case reflect.Float32, reflect.Float64:
-			return convertFloat(e, v)
-		case reflect.Bool:
-			return convertBool(e, v)
-		default:
-			return fmt.Errorf("Unable to set type %T.", e.Kind())
-		}
+		return convertKind(e, v)
 	}
 
 	return nil
 }
 
+func convertMap(e reflect.Value, v string) error {
+	if e.IsNil() {
+		e.Set(reflect.MakeMap(e.Type()))
+	}
+	vals := strings.Split(v, ",")
+	for _, subitem := range vals {
+		subvals := strings.FieldsFunc(subitem, func(c rune) bool {
+			return c == '<' || c == '=' || c == '>'
+		})
+		if len(subvals) != 2 {
+			return fmt.Errorf("unparsable %s", v)
+		}
+		e.SetMapIndex(reflect.ValueOf(subvals[0]), reflect.ValueOf(subvals[1]))
+	}
+	return nil
+}
+
+func convertKind(e reflect.Value, v string) error {
+	switch e.Kind() {
+	case reflect.Int, reflect.Int32, reflect.Int64:
+		return convertInt(e, v)
+	case reflect.String:
+		return convertString(e, v)
+	case reflect.Float32, reflect.Float64:
+		return convertFloat(e, v)
+	case reflect.Bool:
+		return convertBool(e, v)
+	default:
+		return fmt.Errorf("unable to set type %T", e.Kind())
+	}
+}
+
 func convertInt(e reflect.Value, v string) error {
 	i, err := strconv.Atoi(v)
 	if err != nil {
-		return fmt.Errorf("Error converting input %s to an integer: %s", v, err)
+		return fmt.Errorf("error converting input %s to an integer: %v", v, err)
 	}
 	e.SetInt(int64(i))
 	return nil
@@ -121,7 +128,7 @@ func convertString(e reflect.Value, v string) error {
 func convertFloat(e reflect.Value, v string) error {
 	f, err := strconv.ParseFloat(v, 64)
 	if err != nil {
-		return fmt.Errorf("Error converting input %s to a float: %s", v, err)
+		return fmt.Errorf("error converting input %s to a float: %v", v, err)
 	}
 	e.SetFloat(f)
 	return nil
@@ -130,9 +137,45 @@ func convertFloat(e reflect.Value, v string) error {
 func convertBool(e reflect.Value, v string) error {
 	b, err := strconv.ParseBool(v)
 	if err != nil {
-		return fmt.Errorf("Error converting input %s to a bool: %s", v, err)
+		return fmt.Errorf("error converting input %s to a bool: %v", v, err)
 	}
 	e.SetBool(b)
+	return nil
+}
+
+func convertIP(e reflect.Value, v string) error {
+	ip := net.ParseIP(v)
+	if ip == nil {
+		return fmt.Errorf("error converting input %s to an IP", v)
+	}
+	e.Set(reflect.ValueOf(ip))
+	return nil
+}
+
+func convertCIDR(e reflect.Value, v string) error {
+	_, cidr, err := net.ParseCIDR(v)
+	if err != nil {
+		return fmt.Errorf("error converting input %s to a CIDR: %v", v, err)
+	}
+	e.Set(reflect.ValueOf(*cidr))
+	return nil
+}
+
+func convertPortRange(e reflect.Value, v string) error {
+	pr, err := utilnet.ParsePortRange(v)
+	if err != nil {
+		return fmt.Errorf("error converting input %s to PortRange: %v", v, err)
+	}
+	e.Set(reflect.ValueOf(*pr))
+	return nil
+}
+
+func convertDuration(e reflect.Value, v string) error {
+	dur, err := time.ParseDuration(v)
+	if err != nil {
+		return fmt.Errorf("error converting input %s to Duration: %v", v, err)
+	}
+	e.Set(reflect.ValueOf(dur))
 	return nil
 }
 

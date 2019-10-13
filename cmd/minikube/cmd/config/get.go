@@ -17,34 +17,47 @@ limitations under the License.
 package config
 
 import (
+	"errors"
 	"fmt"
-	"os"
-
-	"k8s.io/minikube/pkg/minikube/config"
 
 	"github.com/spf13/cobra"
+	pkgConfig "k8s.io/minikube/pkg/minikube/config"
+	"k8s.io/minikube/pkg/minikube/out"
 )
 
 var configGetCmd = &cobra.Command{
 	Use:   "get PROPERTY_NAME",
 	Short: "Gets the value of PROPERTY_NAME from the minikube config file",
 	Long:  "Returns the value of PROPERTY_NAME from the minikube config file.  Can be overwritten at runtime by flags or environmental variables.",
-	Run: func(cmd *cobra.Command, args []string) {
-		if len(args) != 1 {
-			fmt.Fprintln(os.Stderr, "usage: minikube config get PROPERTY_NAME")
-			os.Exit(1)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			cmd.SilenceErrors = true
+			return errors.New("not enough arguments.\nusage: minikube config get PROPERTY_NAME")
+		}
+		if len(args) > 1 {
+			cmd.SilenceErrors = true
+			return fmt.Errorf("too many arguments (%d)\nusage: minikube config get PROPERTY_NAME", len(args))
 		}
 
-		val, err := config.Get(args[0])
+		cmd.SilenceUsage = true
+		val, err := Get(args[0])
 		if err != nil {
-			fmt.Fprintln(os.Stdout, err)
+			return err
 		}
-		if val != "" {
-			fmt.Fprintln(os.Stdout, val)
+		if val == "" {
+			return fmt.Errorf("no value for key '%s'", args[0])
 		}
+
+		out.Ln(val)
+		return nil
 	},
 }
 
 func init() {
 	ConfigCmd.AddCommand(configGetCmd)
+}
+
+// Get gets a property
+func Get(name string) (string, error) {
+	return pkgConfig.Get(name)
 }

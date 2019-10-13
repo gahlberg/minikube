@@ -23,31 +23,17 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/ioutil"
-	"net/http"
 	"testing"
 
+	retryablehttp "github.com/hashicorp/go-retryablehttp"
 	"k8s.io/minikube/pkg/minikube/constants"
-	"k8s.io/minikube/pkg/minikube/kubernetes_versions"
 	"k8s.io/minikube/pkg/minikube/notify"
 	"k8s.io/minikube/pkg/util"
 )
 
-const (
-	downloadURL = "https://storage.googleapis.com/minikube/releases/%s/minikube-%s-amd64%s"
-)
-
-func getDownloadURL(version, platform string) string {
-	switch platform {
-	case "windows":
-		return fmt.Sprintf(downloadURL, version, platform, ".exe")
-	default:
-		return fmt.Sprintf(downloadURL, version, platform, "")
-	}
-}
-
-func getShaFromURL(url string) (string, error) {
+func getSHAFromURL(url string) (string, error) {
 	fmt.Println("Downloading: ", url)
-	r, err := http.Get(url)
+	r, err := retryablehttp.Get(url)
 	if err != nil {
 		return "", err
 	}
@@ -62,55 +48,24 @@ func getShaFromURL(url string) (string, error) {
 }
 
 func TestReleasesJson(t *testing.T) {
-	releases, err := notify.GetAllVersionsFromURL(constants.GithubMinikubeReleasesURL)
+	releases, err := notify.GetAllVersionsFromURL(notify.GithubMinikubeReleasesURL)
 	if err != nil {
-		t.Fatalf("Error getting releases.json: %s", err)
+		t.Fatalf("Error getting releases.json: %v", err)
 	}
 
 	for _, r := range releases {
 		fmt.Printf("Checking release: %s\n", r.Name)
 		for platform, sha := range r.Checksums {
 			fmt.Printf("Checking SHA for %s.\n", platform)
-			actualSha, err := getShaFromURL(getDownloadURL(r.Name, platform))
+			actualSha, err := getSHAFromURL(util.GetBinaryDownloadURL(r.Name, platform))
 			if err != nil {
-				t.Errorf("Error calcuating SHA for %s-%s. Error: %s", r.Name, platform, err)
+				t.Errorf("Error calculating SHA for %s-%s. Error: %v", r.Name, platform, err)
 				continue
 			}
 			if actualSha != sha {
 				t.Errorf("ERROR: SHA does not match for version %s, platform %s. Expected %s, got %s.", r.Name, platform, sha, actualSha)
 				continue
 			}
-		}
-	}
-}
-
-func TestK8sReleases(t *testing.T) {
-	releases, err := kubernetes_versions.GetK8sVersionsFromURL(constants.KubernetesVersionGCSURL)
-	if err != nil {
-		t.Fatalf("Error getting k8s_releases.json: %s", err)
-	}
-
-	for _, r := range releases {
-		fmt.Printf("Checking release: %s\n", r.Version)
-		url, err := util.GetLocalkubeDownloadURL(r.Version, constants.LocalkubeLinuxFilename)
-		if err != nil {
-			t.Errorf("Error getting URL for %s. Error: %s", r.Version, err)
-			continue
-		}
-		shaURL := fmt.Sprintf("%s%s", url, constants.ShaSuffix)
-		expectedSha, err := util.ParseSHAFromURL(shaURL)
-		if err != nil {
-			t.Errorf("Error retrieving SHA for %s. Error: %s", r.Version, err)
-			continue
-		}
-		actualSha, err := getShaFromURL(url)
-		if err != nil {
-			t.Errorf("Error calculating SHA for %s. Error: %s", r.Version, err)
-			continue
-		}
-		if expectedSha != actualSha {
-			t.Errorf("ERROR: SHA does not match for version %s. Expected %s, got %s.", r.Version, expectedSha, actualSha)
-			continue
 		}
 	}
 }

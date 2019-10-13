@@ -17,25 +17,24 @@ limitations under the License.
 package config
 
 import (
-	"encoding/json"
-	"fmt"
-	"io"
 	"strings"
 
-	"os"
-
+	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 	"k8s.io/minikube/pkg/minikube/config"
-	"k8s.io/minikube/pkg/minikube/constants"
+	"k8s.io/minikube/pkg/minikube/localpath"
 )
 
+// Bootstrapper is the name for bootstrapper
 const Bootstrapper = "bootstrapper"
 
 type setFn func(string, string) error
 
+// Setting represents a setting
 type Setting struct {
 	name        string
 	set         func(config.MinikubeConfig, string, string) error
+	setMap      func(config.MinikubeConfig, string, map[string]interface{}) error
 	validations []setFn
 	callbacks   []setFn
 }
@@ -48,6 +47,17 @@ var settings = []Setting{
 		set:         SetString,
 		validations: []setFn{IsValidDriver},
 		callbacks:   []setFn{RequiresRestartMsg},
+	},
+	{
+		name:        "container-runtime",
+		set:         SetString,
+		validations: []setFn{IsContainerdRuntime},
+		callbacks:   []setFn{RequiresRestartMsg},
+	},
+	{
+		name:      "feature-gates",
+		set:       SetString,
+		callbacks: []setFn{RequiresRestartMsg},
 	},
 	{
 		name:        "v",
@@ -89,7 +99,7 @@ var settings = []Setting{
 	{
 		name:        "iso-url",
 		set:         SetString,
-		validations: []setFn{IsValidURL},
+		validations: []setFn{IsValidURL, IsURLExists},
 	},
 	{
 		name: config.WantUpdateNotification,
@@ -112,12 +122,24 @@ var settings = []Setting{
 		set:  SetBool,
 	},
 	{
+		name: config.WantNoneDriverWarning,
+		set:  SetBool,
+	},
+	{
 		name: config.MachineProfile,
 		set:  SetString,
 	},
 	{
 		name: Bootstrapper,
 		set:  SetString, //TODO(r2d4): more validation here?
+	},
+	{
+		name: config.ShowDriverDeprecationNotification,
+		set:  SetBool,
+	},
+	{
+		name: config.ShowBootstrapperDeprecationNotification,
+		set:  SetBool,
 	},
 	{
 		name:        "dashboard",
@@ -135,19 +157,7 @@ var settings = []Setting{
 		name:        "default-storageclass",
 		set:         SetBool,
 		validations: []setFn{IsValidAddon},
-		callbacks:   []setFn{EnableOrDisableAddon},
-	},
-	{
-		name:        "coredns",
-		set:         SetBool,
-		validations: []setFn{IsValidAddon},
-		callbacks:   []setFn{EnableOrDisableAddon},
-	},
-	{
-		name:        "kube-dns",
-		set:         SetBool,
-		validations: []setFn{IsValidAddon},
-		callbacks:   []setFn{EnableOrDisableAddon},
+		callbacks:   []setFn{EnableOrDisableStorageClasses},
 	},
 	{
 		name:        "heapster",
@@ -168,6 +178,12 @@ var settings = []Setting{
 		callbacks:   []setFn{EnableOrDisableAddon},
 	},
 	{
+		name:        "insecure-registry",
+		set:         SetBool,
+		validations: []setFn{IsValidAddon},
+		callbacks:   []setFn{EnableOrDisableAddon},
+	},
+	{
 		name:        "registry",
 		set:         SetBool,
 		validations: []setFn{IsValidAddon},
@@ -180,10 +196,69 @@ var settings = []Setting{
 		callbacks:   []setFn{EnableOrDisableAddon},
 	},
 	{
+		name:        "freshpod",
+		set:         SetBool,
+		validations: []setFn{IsValidAddon},
+		callbacks:   []setFn{EnableOrDisableAddon},
+	},
+	{
 		name:        "default-storageclass",
 		set:         SetBool,
 		validations: []setFn{IsValidAddon},
-		callbacks:   []setFn{EnableOrDisableDefaultStorageClass},
+		callbacks:   []setFn{EnableOrDisableStorageClasses},
+	},
+	{
+		name:        "storage-provisioner",
+		set:         SetBool,
+		validations: []setFn{IsValidAddon},
+		callbacks:   []setFn{EnableOrDisableAddon},
+	},
+	{
+		name:        "storage-provisioner-gluster",
+		set:         SetBool,
+		validations: []setFn{IsValidAddon},
+		callbacks:   []setFn{EnableOrDisableStorageClasses},
+	},
+	{
+		name:        "metrics-server",
+		set:         SetBool,
+		validations: []setFn{IsValidAddon},
+		callbacks:   []setFn{EnableOrDisableAddon},
+	},
+	{
+		name:        "nvidia-driver-installer",
+		set:         SetBool,
+		validations: []setFn{IsValidAddon},
+		callbacks:   []setFn{EnableOrDisableAddon},
+	},
+	{
+		name:        "nvidia-gpu-device-plugin",
+		set:         SetBool,
+		validations: []setFn{IsValidAddon},
+		callbacks:   []setFn{EnableOrDisableAddon},
+	},
+	{
+		name:        "logviewer",
+		set:         SetBool,
+		validations: []setFn{IsValidAddon},
+	},
+	{
+		name:        "gvisor",
+		set:         SetBool,
+		validations: []setFn{IsValidAddon, IsContainerdRuntime},
+		callbacks:   []setFn{EnableOrDisableAddon},
+	},
+	{
+		name:        "helm-tiller",
+		set:         SetBool,
+		validations: []setFn{IsValidAddon},
+		callbacks:   []setFn{EnableOrDisableAddon},
+	},
+	{
+		name:        "ingress-dns",
+		set:         SetBool,
+		validations: []setFn{IsValidAddon},
+		callbacks:   []setFn{EnableOrDisableAddon},
 	},
 	{
 		name: "hyperv-virtual-switch",
@@ -193,47 +268,105 @@ var settings = []Setting{
 		name: "disable-driver-mounts",
 		set:  SetBool,
 	},
+	{
+		name:   "cache",
+		set:    SetConfigMap,
+		setMap: SetMap,
+	},
+	{
+		name: "embed-certs",
+		set:  SetBool,
+	},
+	{
+		name: "native-ssh",
+		set:  SetBool,
+	},
 }
 
+// ConfigCmd represents the config command
 var ConfigCmd = &cobra.Command{
 	Use:   "config SUBCOMMAND [flags]",
 	Short: "Modify minikube config",
 	Long: `config modifies minikube config files using subcommands like "minikube config set vm-driver kvm"
 Configurable fields: ` + "\n\n" + configurableFields(),
 	Run: func(cmd *cobra.Command, args []string) {
-		cmd.Help()
+		if err := cmd.Help(); err != nil {
+			glog.Errorf("help: %v", err)
+		}
 	},
 }
 
 func configurableFields() string {
-	var fields []string
+	fields := []string{}
 	for _, s := range settings {
 		fields = append(fields, " * "+s.name)
 	}
 	return strings.Join(fields, "\n")
 }
 
-// WriteConfig writes a minikube config to the JSON file
-func WriteConfig(m config.MinikubeConfig) error {
-	f, err := os.Create(constants.ConfigFile)
+// ListConfigMap list entries from config file
+func ListConfigMap(name string) ([]string, error) {
+	configFile, err := config.ReadConfig(localpath.ConfigFile)
 	if err != nil {
-		return fmt.Errorf("Could not open file %s: %s", constants.ConfigFile, err)
+		return nil, err
 	}
-	defer f.Close()
-	err = encode(f, m)
-	if err != nil {
-		return fmt.Errorf("Error encoding config %s: %s", constants.ConfigFile, err)
+	var images []string
+	if values, ok := configFile[name].(map[string]interface{}); ok {
+		for key := range values {
+			images = append(images, key)
+		}
 	}
-	return nil
+	return images, nil
 }
 
-func encode(w io.Writer, m config.MinikubeConfig) error {
-	b, err := json.MarshalIndent(m, "", "    ")
+// AddToConfigMap adds entries to a map in the config file
+func AddToConfigMap(name string, images []string) error {
+	s, err := findSetting(name)
 	if err != nil {
 		return err
 	}
+	// Set the values
+	cfg, err := config.ReadConfig(localpath.ConfigFile)
+	if err != nil {
+		return err
+	}
+	newImages := make(map[string]interface{})
+	for _, image := range images {
+		newImages[image] = nil
+	}
+	if values, ok := cfg[name].(map[string]interface{}); ok {
+		for key := range values {
+			newImages[key] = nil
+		}
+	}
+	if err = s.setMap(cfg, name, newImages); err != nil {
+		return err
+	}
+	// Write the values
+	return config.WriteConfig(localpath.ConfigFile, cfg)
+}
 
-	_, err = w.Write(b)
-
-	return err
+// DeleteFromConfigMap deletes entries from a map in the config file
+func DeleteFromConfigMap(name string, images []string) error {
+	s, err := findSetting(name)
+	if err != nil {
+		return err
+	}
+	// Set the values
+	cfg, err := config.ReadConfig(localpath.ConfigFile)
+	if err != nil {
+		return err
+	}
+	values, ok := cfg[name]
+	if !ok {
+		return nil
+	}
+	for _, image := range images {
+		delete(values.(map[string]interface{}), image)
+	}
+	if err = s.setMap(cfg, name, values.(map[string]interface{})); err != nil {
+		return err
+	}
+	// Write the values
+	return config.WriteConfig(localpath.ConfigFile, cfg)
 }

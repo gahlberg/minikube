@@ -26,19 +26,22 @@ import (
 	"text/template"
 
 	"github.com/docker/machine/libmachine"
+	"github.com/docker/machine/libmachine/drivers"
+	"github.com/docker/machine/libmachine/host"
+	"github.com/docker/machine/libmachine/log"
 	"github.com/docker/machine/libmachine/shell"
-	"github.com/golang/glog"
+	"github.com/docker/machine/libmachine/state"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
-	cmdUtil "k8s.io/minikube/cmd/util"
 	"k8s.io/minikube/pkg/minikube/cluster"
 	"k8s.io/minikube/pkg/minikube/config"
 	"k8s.io/minikube/pkg/minikube/constants"
+	"k8s.io/minikube/pkg/minikube/exit"
 	"k8s.io/minikube/pkg/minikube/machine"
 )
 
 const (
-	envTmpl = `{{ .Prefix }}DOCKER_TLS_VERIFY{{ .Delimiter }}{{ .DockerTLSVerify }}{{ .Suffix }}{{ .Prefix }}DOCKER_HOST{{ .Delimiter }}{{ .DockerHost }}{{ .Suffix }}{{ .Prefix }}DOCKER_CERT_PATH{{ .Delimiter }}{{ .DockerCertPath }}{{ .Suffix }}{{ .Prefix }}DOCKER_API_VERSION{{ .Delimiter }}{{ .DockerAPIVersion }}{{ .Suffix }}{{ if .NoProxyVar }}{{ .Prefix }}{{ .NoProxyVar }}{{ .Delimiter }}{{ .NoProxyValue }}{{ .Suffix }}{{end}}{{ .UsageHint }}`
+	envTmpl = `{{ .Prefix }}DOCKER_TLS_VERIFY{{ .Delimiter }}{{ .DockerTLSVerify }}{{ .Suffix }}{{ .Prefix }}DOCKER_HOST{{ .Delimiter }}{{ .DockerHost }}{{ .Suffix }}{{ .Prefix }}DOCKER_CERT_PATH{{ .Delimiter }}{{ .DockerCertPath }}{{ .Suffix }}{{ if .NoProxyVar }}{{ .Prefix }}{{ .NoProxyVar }}{{ .Delimiter }}{{ .NoProxyValue }}{{ .Suffix }}{{end}}{{ .UsageHint }}`
 
 	fishSetPfx   = "set -gx "
 	fishSetSfx   = "\";\n"
@@ -103,17 +106,17 @@ REM @FOR /f "tokens=*" %i IN ('minikube docker-env') DO @%i
 `,
 }
 
+// ShellConfig represents the shell config
 type ShellConfig struct {
-	Prefix           string
-	Delimiter        string
-	Suffix           string
-	DockerCertPath   string
-	DockerHost       string
-	DockerTLSVerify  string
-	DockerAPIVersion string
-	UsageHint        string
-	NoProxyVar       string
-	NoProxyValue     string
+	Prefix          string
+	Delimiter       string
+	Suffix          string
+	DockerCertPath  string
+	DockerHost      string
+	DockerTLSVerify string
+	UsageHint       string
+	NoProxyVar      string
+	NoProxyValue    string
 }
 
 var (
@@ -124,16 +127,20 @@ var (
 	defaultNoProxyGetter NoProxyGetter
 )
 
+// ShellDetector detects shell
 type ShellDetector interface {
 	GetShell(string) (string, error)
 }
 
+// LibmachineShellDetector detects shell, using libmachine
 type LibmachineShellDetector struct{}
 
+// NoProxyGetter gets the no_proxy variable
 type NoProxyGetter interface {
 	GetNoProxyVar() (string, string)
 }
 
+// EnvNoProxyGetter gets the no_proxy variable, using environment
 type EnvNoProxyGetter struct{}
 
 func generateUsageHint(userShell string) string {
@@ -157,11 +164,10 @@ func shellCfgSet(api libmachine.API) (*ShellConfig, error) {
 	}
 
 	shellCfg := &ShellConfig{
-		DockerCertPath:   envMap["DOCKER_CERT_PATH"],
-		DockerHost:       envMap["DOCKER_HOST"],
-		DockerTLSVerify:  envMap["DOCKER_TLS_VERIFY"],
-		DockerAPIVersion: constants.DockerAPIVersion,
-		UsageHint:        generateUsageHint(userShell),
+		DockerCertPath:  envMap["DOCKER_CERT_PATH"],
+		DockerHost:      envMap["DOCKER_HOST"],
+		DockerTLSVerify: envMap["DOCKER_TLS_VERIFY"],
+		UsageHint:       generateUsageHint(userShell),
 	}
 
 	if noProxy {
@@ -273,6 +279,7 @@ func executeTemplateStdout(shellCfg *ShellConfig) error {
 	return tmpl.Execute(os.Stdout, shellCfg)
 }
 
+// GetShell detects the shell
 func (LibmachineShellDetector) GetShell(userShell string) (string, error) {
 	if userShell != "" {
 		return userShell, nil
@@ -280,6 +287,7 @@ func (LibmachineShellDetector) GetShell(userShell string) (string, error) {
 	return shell.Detect()
 }
 
+// GetNoProxyVar gets the no_proxy var
 func (EnvNoProxyGetter) GetNoProxyVar() (string, string) {
 	// first check for an existing lower case no_proxy var
 	noProxyVar := "no_proxy"
@@ -293,27 +301,64 @@ func (EnvNoProxyGetter) GetNoProxyVar() (string, string) {
 	return noProxyVar, noProxyValue
 }
 
+// same as drivers.RunSSHCommandFromDriver, but allows errors
+func runSSHCommandFromDriver(d drivers.Driver, command string) (string, error) {
+	client, err := drivers.GetSSHClientFromDriver(d)
+	if err != nil {
+		return "", err
+	}
+
+	log.Debugf("About to run SSH command:\n%s", command)
+	output, err := client.Output(command)
+	log.Debugf("SSH cmd err, output: %v: %s", err, output)
+	return output, err
+}
+
+// same as host.RunSSHCommand, but allows errors
+func runSSHCommand(h *host.Host, command string) (string, error) {
+	return runSSHCommandFromDriver(h.Driver, command)
+}
+
+// GetDockerActive checks if Docker is active
+func GetDockerActive(host *host.Host) (bool, error) {
+	statusCmd := `sudo systemctl is-active docker`
+	status, err := runSSHCommand(host, statusCmd)
+	// systemd returns error code on inactive
+	s := strings.TrimSpace(status)
+	return err == nil && s == "active", nil
+}
+
 // envCmd represents the docker-env command
 var dockerEnvCmd = &cobra.Command{
 	Use:   "docker-env",
 	Short: "Sets up docker env variables; similar to '$(docker-machine env)'",
 	Long:  `Sets up docker env variables; similar to '$(docker-machine env)'.`,
 	Run: func(cmd *cobra.Command, args []string) {
-
 		api, err := machine.NewAPIClient()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error getting client: %s\n", err)
-			os.Exit(1)
+			exit.WithError("Error getting client", err)
 		}
 		defer api.Close()
-		host, err := cluster.CheckIfApiExistsAndLoad(api)
+		host, err := cluster.CheckIfHostExistsAndLoad(api, config.GetMachineName())
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error getting host: %s\n", err)
-			os.Exit(1)
+			exit.WithError("Error getting host", err)
 		}
-		if host.Driver.DriverName() == "none" {
-			fmt.Println(`'none' driver does not support 'minikube docker-env' command`)
-			os.Exit(0)
+		if host.Driver.DriverName() == constants.DriverNone {
+			exit.UsageT(`'none' driver does not support 'minikube docker-env' command`)
+		}
+		hostSt, err := cluster.GetHostStatus(api)
+		if err != nil {
+			exit.WithError("Error getting host status", err)
+		}
+		if hostSt != state.Running.String() {
+			exit.WithCodeT(exit.Unavailable, `The docker host is currently not running`)
+		}
+		docker, err := GetDockerActive(host)
+		if err != nil {
+			exit.WithError("Error getting service status", err)
+		}
+		if !docker {
+			exit.WithCodeT(exit.Unavailable, `The docker service is currently not active`)
 		}
 
 		var shellCfg *ShellConfig
@@ -321,23 +366,22 @@ var dockerEnvCmd = &cobra.Command{
 		if unset {
 			shellCfg, err = shellCfgUnset()
 			if err != nil {
-				glog.Errorln("Error setting machine env variable(s):", err)
-				cmdUtil.MaybeReportErrorAndExit(err)
+				exit.WithError("Error unsetting shell variables", err)
 			}
 		} else {
 			shellCfg, err = shellCfgSet(api)
 			if err != nil {
-				glog.Errorln("Error setting machine env variable(s):", err)
-				cmdUtil.MaybeReportErrorAndExit(err)
+				exit.WithError("Error setting shell variables", err)
 			}
 		}
 
-		executeTemplateStdout(shellCfg)
+		if err := executeTemplateStdout(shellCfg); err != nil {
+			exit.WithError("Error executing template", err)
+		}
 	},
 }
 
 func init() {
-	RootCmd.AddCommand(dockerEnvCmd)
 	defaultShellDetector = &LibmachineShellDetector{}
 	defaultNoProxyGetter = &EnvNoProxyGetter{}
 	dockerEnvCmd.Flags().BoolVar(&noProxy, "no-proxy", false, "Add machine IP to NO_PROXY environment variable")

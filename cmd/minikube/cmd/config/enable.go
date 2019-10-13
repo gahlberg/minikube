@@ -17,10 +17,9 @@ limitations under the License.
 package config
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/spf13/cobra"
+	"k8s.io/minikube/pkg/minikube/exit"
+	"k8s.io/minikube/pkg/minikube/out"
 )
 
 var addonsEnableCmd = &cobra.Command{
@@ -29,17 +28,15 @@ var addonsEnableCmd = &cobra.Command{
 	Long:  "Enables the addon w/ADDON_NAME within minikube (example: minikube addons enable dashboard). For a list of available addons use: minikube addons list ",
 	Run: func(cmd *cobra.Command, args []string) {
 		if len(args) != 1 {
-			fmt.Fprintln(os.Stderr, "usage: minikube addons enable ADDON_NAME")
-			os.Exit(1)
+			exit.UsageT("usage: minikube addons enable ADDON_NAME")
 		}
 
 		addon := args[0]
 		err := Set(addon, "true")
 		if err != nil {
-			fmt.Fprintln(os.Stdout, err)
-		} else {
-			fmt.Fprintln(os.Stdout, fmt.Sprintf("%s was successfully enabled", addon))
+			exit.WithError("enable failed", err)
 		}
+		out.SuccessT("{{.addonName}} was successfully enabled", out.V{"addonName": addon})
 	},
 }
 

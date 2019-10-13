@@ -26,7 +26,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"k8s.io/minikube/pkg/minikube/constants"
+	"k8s.io/minikube/pkg/minikube/localpath"
 	"k8s.io/minikube/pkg/minikube/tests"
 )
 
@@ -35,7 +35,7 @@ func TestGetISOFileURI(t *testing.T) {
 
 	tests := map[string]string{
 		"file:///test/path/minikube-test.iso":                           "file:///test/path/minikube-test.iso",
-		"https://storage.googleapis.com/minikube/iso/minikube-test.iso": "file://" + filepath.ToSlash(filepath.Join(constants.GetMinipath(), "cache", "iso", "minikube-test.iso")),
+		"https://storage.googleapis.com/minikube/iso/minikube-test.iso": "file://" + filepath.ToSlash(filepath.Join(localpath.MiniPath(), "cache", "iso", "minikube-test.iso")),
 	}
 
 	for input, expected := range tests {
@@ -52,14 +52,16 @@ func TestCacheMinikubeISOFromURL(t *testing.T) {
 	tempDir := tests.MakeTempDir()
 	defer os.RemoveAll(tempDir)
 	dler := DefaultDownloader{}
-	isoPath := filepath.Join(constants.GetMinipath(), "cache", "iso", "minikube-test.iso")
+	isoPath := filepath.Join(localpath.MiniPath(), "cache", "iso", "minikube-test.iso")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, testISOString)
+		if _, err := io.WriteString(w, testISOString); err != nil {
+			t.Fatalf("WriteString: %v", err)
+		}
 	}))
 	isoURL := server.URL + "/minikube-test.iso"
 	if err := dler.CacheMinikubeISOFromURL(isoURL); err != nil {
-		t.Fatalf("Unexpected error from CacheMinikubeISOFromURL: %s", err)
+		t.Fatalf("Unexpected error from CacheMinikubeISOFromURL: %v", err)
 	}
 
 	transferred, err := ioutil.ReadFile(filepath.Join(isoPath))
@@ -67,7 +69,7 @@ func TestCacheMinikubeISOFromURL(t *testing.T) {
 		t.Fatalf("File not copied. Could not open file at path: %s", isoPath)
 	}
 
-	//test that the ISO is transferred properly
+	// test that the ISO is transferred properly
 	contents := []byte(testISOString)
 	if !bytes.Contains(transferred, contents) {
 		t.Fatalf("Expected transfers to contain: %s. It was: %s", contents, transferred)
@@ -103,7 +105,9 @@ func TestIsMinikubeISOCached(t *testing.T) {
 		t.Fatalf("Expected IsMinikubeISOCached with input %s to return %t but instead got: %t", testFileURI, expected, out)
 	}
 
-	ioutil.WriteFile(filepath.Join(constants.GetMinipath(), "cache", "iso", "minikube-test.iso"), []byte(testISOString), os.FileMode(int(0644)))
+	if err := ioutil.WriteFile(filepath.Join(localpath.MiniPath(), "cache", "iso", "minikube-test.iso"), []byte(testISOString), os.FileMode(int(0644))); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	expected = true
 	if out := dler.IsMinikubeISOCached(testFileURI); out != expected {

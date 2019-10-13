@@ -17,6 +17,7 @@ limitations under the License.
 package sshutil
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/docker/machine/libmachine/drivers"
@@ -24,41 +25,101 @@ import (
 	"k8s.io/minikube/pkg/minikube/tests"
 )
 
+type MockDriverBadPort struct{ tests.MockDriver }
+
+func (MockDriverBadPort) GetSSHPort() (int, error) {
+	return 22, fmt.Errorf("bad port err")
+}
+
 func TestNewSSHClient(t *testing.T) {
-	s, _ := tests.NewSSHServer()
+	s, err := tests.NewSSHServer(t)
+	if err != nil {
+		t.Fatalf("NewSSHServer: %v", err)
+	}
 	port, err := s.Start()
 	if err != nil {
-		t.Fatalf("Error starting ssh server: %s", err)
+		t.Fatalf("Error starting ssh server: %v", err)
 	}
+	defer s.Stop()
+
 	d := &tests.MockDriver{
 		Port: port,
 		BaseDriver: drivers.BaseDriver{
 			IPAddress:  "127.0.0.1",
 			SSHKeyPath: "",
 		},
+		T: t,
 	}
 	c, err := NewSSHClient(d)
 	if err != nil {
-		t.Fatalf("Unexpected error: %s", err)
+		t.Fatalf("Unexpected error: %v", err)
 	}
+	defer c.Close()
 
-	cmd := "foo"
 	sess, err := c.NewSession()
-	defer sess.Close()
 	if err != nil {
 		t.Fatal("Error creating new session for ssh client")
 	}
+	defer sess.Close()
 
+	cmd := "foo"
 	if err := sess.Run(cmd); err != nil {
-		t.Fatalf("Error running command: %s", cmd)
+		t.Fatalf("Error running %q: %v", cmd, err)
 	}
 	if !s.Connected {
-		t.Fatalf("Error!")
+		t.Fatalf("Server not connected")
 	}
-
 	if _, ok := s.Commands[cmd]; !ok {
 		t.Fatalf("Expected command: %s", cmd)
 	}
+}
+
+func TestNewSSHClientError(t *testing.T) {
+	t.Run("Bad Port", func(t *testing.T) {
+		d := MockDriverBadPort{}
+		_, err := NewSSHClient(&d)
+		if err == nil {
+			t.Fatalf("Expected to fail dor driver: %v", d)
+		}
+	})
+	t.Run("Bad ssh key path", func(t *testing.T) {
+		s, err := tests.NewSSHServer(t)
+		if err != nil {
+			t.Fatalf("NewSSHServer: %v", err)
+		}
+		port, err := s.Start()
+		if err != nil {
+			t.Fatalf("Error starting ssh server: %v", err)
+		}
+		defer s.Stop()
+
+		d := &tests.MockDriver{
+			Port: port,
+			BaseDriver: drivers.BaseDriver{
+				IPAddress:  "127.0.0.1",
+				SSHKeyPath: "/etc/hosts",
+			},
+			T: t,
+		}
+		_, err = NewSSHClient(d)
+		if err == nil {
+			t.Fatalf("Expected to fail for driver: %v", d)
+		}
+	})
+	t.Run("Dial err", func(t *testing.T) {
+		d := &tests.MockDriver{
+			Port: 22,
+			BaseDriver: drivers.BaseDriver{
+				IPAddress:  "127.0.0.1",
+				SSHKeyPath: "",
+			},
+			T: t,
+		}
+		_, err := NewSSHClient(d)
+		if err == nil {
+			t.Fatalf("Expected to fail for driver: %v", d)
+		}
+	})
 }
 
 func TestNewSSHHost(t *testing.T) {
@@ -75,7 +136,7 @@ func TestNewSSHHost(t *testing.T) {
 
 	h, err := newSSHHost(&d)
 	if err != nil {
-		t.Fatalf("Unexpected error creating host: %s", err)
+		t.Fatalf("Unexpected error creating host: %v", err)
 	}
 
 	if h.SSHKeyPath != sshKeyPath {
@@ -90,10 +151,18 @@ func TestNewSSHHost(t *testing.T) {
 }
 
 func TestNewSSHHostError(t *testing.T) {
-	d := tests.MockDriver{HostError: true}
-
-	_, err := newSSHHost(&d)
-	if err == nil {
-		t.Fatal("Expected error creating host, got nil")
-	}
+	t.Run("Host error", func(t *testing.T) {
+		d := tests.MockDriver{HostError: true}
+		_, err := newSSHHost(&d)
+		if err == nil {
+			t.Fatal("Expected error for creating newSSHHost with host error, but got nil")
+		}
+	})
+	t.Run("Bad port", func(t *testing.T) {
+		d := MockDriverBadPort{}
+		_, err := newSSHHost(&d)
+		if err == nil {
+			t.Fatal("Expected error for creating newSSHHost with bad port, but got nil")
+		}
+	})
 }

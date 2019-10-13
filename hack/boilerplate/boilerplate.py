@@ -89,7 +89,7 @@ def file_passes(filename, refs, regexs):
         if p.search(d):
             return False
 
-    # Replace all occurrences of the regex "2017|2016|2015|2014" with "YEAR"
+    # Replace all occurrences of the regex "2018|2017|2016|2015|2014" with "YEAR"
     p = regexs["date"]
     for i, d in enumerate(data):
         (data[i], found) = p.subn('YEAR', d)
@@ -115,7 +115,7 @@ def normalize_files(files):
         newfiles.append(pathname)
     for i, pathname in enumerate(newfiles):
         if not os.path.isabs(pathname):
-            newfiles[i] = os.path.join(args.rootdir, pathname)
+            newfiles[i] = os.path.join(rootdir, pathname)
     return newfiles
 
 def get_files(extensions):
@@ -149,8 +149,8 @@ def get_regexs():
     regexs = {}
     # Search for "YEAR" which exists in the boilerplate, but shouldn't in the real thing
     regexs["year"] = re.compile( 'YEAR' )
-    # dates can be 2014, 2015, 2016 or 2017, company holder names can be anything
-    regexs["date"] = re.compile( '(2014|2015|2016|2017)' )
+    # dates can be 2010 to 2039
+    regexs["date"] = re.compile( '(20[123]\d)' )
     # strip // +build \n\n build constraints
     regexs["go_build_constraints"] = re.compile(r"^(// \+build.*\n)+\n", re.MULTILINE)
     # strip #!.* from shell scripts

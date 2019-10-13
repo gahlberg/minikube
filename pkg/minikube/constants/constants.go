@@ -18,34 +18,51 @@ package constants
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
-	"k8s.io/kubernetes/pkg/version"
+	"k8s.io/minikube/pkg/minikube/localpath"
 	minikubeVersion "k8s.io/minikube/pkg/version"
 )
 
-// APIServerPort is the port that the API server should listen on.
 const (
-	APIServerName    = "minikubeCA"
+	// APIServerPort is the default API server port
+	APIServerPort = 8443
+	// APIServerName is the default API server name
+	APIServerName = "minikubeCA"
+	// ClusterDNSDomain is the default DNS domain
 	ClusterDNSDomain = "cluster.local"
 )
 
-const MinikubeHome = "MINIKUBE_HOME"
+// DriverMock is a mock driver.
+const DriverMock = "mock-driver"
 
-// Minipath is the path to the user's minikube dir
-func GetMinipath() string {
-	if os.Getenv(MinikubeHome) == "" {
-		return DefaultMinipath
-	}
-	if filepath.Base(os.Getenv(MinikubeHome)) == ".minikube" {
-		return os.Getenv(MinikubeHome)
-	}
-	return filepath.Join(os.Getenv(MinikubeHome), ".minikube")
-}
+// DriverNone is the none driver.
+const DriverNone = "none"
 
+// DriverKvm2 is the kvm2 driver option name for in linux
+const DriverKvm2 = "kvm2"
+
+// DriverVirtualbox is the virtualbox driver option name
+const DriverVirtualbox = "virtualbox"
+
+// DriverHyperkit is the hyperkit driver option name for mac os
+const DriverHyperkit = "hyperkit"
+
+// DriverVmware is the vmware driver option name
+const DriverVmware = "vmware"
+
+// DriverVmwareFusion is the vmware fusion driver option
+const DriverVmwareFusion = "vmwarefusion"
+
+// DriverHyperv is the hyperv driver option for windows
+const DriverHyperv = "hyperv"
+
+// DriverParallels is the parallels driver option name
+const DriverParallels = "parallels"
+
+// DefaultMinipath is the default Minikube path (under the home directory)
 var DefaultMinipath = filepath.Join(homedir.HomeDir(), ".minikube")
 
 // KubeconfigPath is the path to the Kubernetes client config
@@ -54,160 +71,56 @@ var KubeconfigPath = clientcmd.RecommendedHomeFile
 // KubeconfigEnvVar is the env var to check for the Kubernetes client config
 var KubeconfigEnvVar = clientcmd.RecommendedConfigPathEnvVar
 
-// MinikubeContext is the kubeconfig context name used for minikube
-const MinikubeContext = "minikube"
-
-// MinikubeEnvPrefix is the prefix for the environmental variables
-const MinikubeEnvPrefix = "MINIKUBE"
-
 // DefaultMachineName is the default name for the VM
 const DefaultMachineName = "minikube"
 
-// The name of the default storage class provisioner
-const DefaultStorageClassProvisioner = "standard"
+// DefaultNodeName is the default name for the kubeadm node within the VM
+const DefaultNodeName = "minikube"
 
-// MakeMiniPath is a utility to calculate a relative path to our directory.
-func MakeMiniPath(fileName ...string) string {
-	args := []string{GetMinipath()}
-	args = append(args, fileName...)
-	return filepath.Join(args...)
-}
-
+// MountProcessFileName is the filename of the mount process
 var MountProcessFileName = ".mount-process"
 
-// Only pass along these flags to localkube.
-var LogFlags = [...]string{
-	"v",
-	"vmodule",
-}
-
 const (
-	DefaultKeepContext  = false
-	ShaSuffix           = ".sha256"
-	DefaultMemory       = 2048
-	DefaultCPUS         = 2
-	DefaultDiskSize     = "20g"
-	MinimumDiskSizeMB   = 2000
-	DefaultVMDriver     = "virtualbox"
-	DefaultStatusFormat = "minikube: {{.MinikubeStatus}}\n" +
-		"cluster: {{.ClusterStatus}}\n" + "kubectl: {{.KubeconfigStatus}}\n"
-	DefaultAddonListFormat     = "- {{.AddonName}}: {{.AddonStatus}}\n"
-	DefaultConfigViewFormat    = "- {{.ConfigKey}}: {{.ConfigValue}}\n"
-	GithubMinikubeReleasesURL  = "https://storage.googleapis.com/minikube/releases.json"
-	KubernetesVersionGCSURL    = "https://storage.googleapis.com/minikube/k8s_releases.json"
-	DefaultWait                = 20
-	DefaultInterval            = 6
-	DefaultClusterBootstrapper = "localkube"
+	// SHASuffix is the suffix of a SHA-256 checksum file
+	SHASuffix = ".sha256"
 )
 
-var DefaultIsoUrl = fmt.Sprintf("https://storage.googleapis.com/%s/minikube-%s.iso", minikubeVersion.GetIsoPath(), minikubeVersion.GetIsoVersion())
-var DefaultIsoShaUrl = DefaultIsoUrl + ShaSuffix
+// DefaultISOURL is the default location of the minikube.iso file
+var DefaultISOURL = fmt.Sprintf("https://storage.googleapis.com/%s/minikube-%s.iso", minikubeVersion.GetISOPath(), minikubeVersion.GetISOVersion())
 
-var DefaultKubernetesVersion = version.Get().GitVersion
+// DefaultISOSHAURL is the default location of the minikube.iso.sha256 file
+var DefaultISOSHAURL = DefaultISOURL + SHASuffix
 
-var ConfigFilePath = MakeMiniPath("config")
-var ConfigFile = MakeMiniPath("config", "config.json")
+// DefaultKubernetesVersion is the default kubernetes version
+var DefaultKubernetesVersion = "v1.16.1"
 
-// GetProfileFile returns the Minikube profile config file
-func GetProfileFile(profile string) string {
-	return filepath.Join(GetMinipath(), "profiles", profile, "config.json")
-}
+// NewestKubernetesVersion is the newest Kubernetes version to test against
+var NewestKubernetesVersion = "v1.16.1"
 
-var LocalkubeDownloadURLPrefix = "https://storage.googleapis.com/minikube/k8sReleases/"
-var LocalkubeLinuxFilename = "localkube-linux-amd64"
-
-// DockerAPIVersion is the API version implemented by Docker running in the minikube VM.
-const DockerAPIVersion = "1.23"
-
-const ReportingURL = "https://clouderrorreporting.googleapis.com/v1beta1/projects/k8s-minikube/events:report?key=AIzaSyACUwzG0dEPcl-eOgpDKnyKoUFgHdfoFuA"
-
-const AddonsPath = "/etc/kubernetes/addons"
-const FilesPath = "/files"
+// OldestKubernetesVersion is the oldest Kubernetes version to test against
+var OldestKubernetesVersion = "v1.11.10"
 
 const (
-	RemoteLocalKubeErrPath = "/var/lib/localkube/localkube.err"
-	RemoteLocalKubeOutPath = "/var/lib/localkube/localkube.out"
-	LocalkubePIDPath       = "/var/run/localkube.pid"
+	// IsMinikubeChildProcess is the name of "is minikube child process" variable
+	IsMinikubeChildProcess = "IS_MINIKUBE_CHILD_PROCESS"
 )
+
+// ImageRepositories contains all known image repositories
+var ImageRepositories = map[string][]string{
+	"global": {""},
+	"cn":     {"registry.cn-hangzhou.aliyuncs.com/google_containers"},
+}
+
+// KubeadmBinaries are Kubernetes release binaries required for kubeadm
+var KubeadmBinaries = []string{"kubelet", "kubeadm"}
+
+// ImageCacheDir is the path to the image cache directory
+var ImageCacheDir = localpath.MakeMiniPath("cache", "images")
 
 const (
-	KubeletServiceFile     = "/lib/systemd/system/kubelet.service"
-	KubeletSystemdConfFile = "/etc/systemd/system/kubelet.service.d/10-kubeadm.conf"
-	KubeadmConfigFile      = "/var/lib/kubeadm.yaml"
+	// GvisorFilesPath is the path to the gvisor files saved by go-bindata
+	GvisorFilesPath = "/tmp/gvisor"
+
+	// GvisorConfigTomlTargetName is the go-bindata target name for the gvisor config.toml
+	GvisorConfigTomlTargetName = "gvisor-config.toml"
 )
-
-const (
-	LocalkubeServicePath = "/etc/systemd/system/localkube.service"
-	LocalkubeRunning     = "active"
-	LocalkubeStopped     = "inactive"
-)
-
-const (
-	DefaultUfsPort       = "5640"
-	DefaultUfsDebugLvl   = 0
-	DefaultMountEndpoint = "/minikube-host"
-	DefaultMsize         = 262144
-	DefaultMountVersion  = "9p2000.u"
-)
-
-func GetKubernetesReleaseURL(binaryName, version string) string {
-	return fmt.Sprintf("https://storage.googleapis.com/kubernetes-release/release/%s/bin/linux/amd64/%s", version, binaryName)
-}
-
-func GetKubernetesReleaseURLSha1(binaryName, version string) string {
-	return fmt.Sprintf("%s.sha1", GetKubernetesReleaseURL(binaryName, version))
-}
-
-const IsMinikubeChildProcess = "IS_MINIKUBE_CHILD_PROCESS"
-const DriverNone = "none"
-const FileScheme = "file"
-
-var LocalkubeCachedImages = []string{
-	// Dashboard
-	"gcr.io/google_containers/kubernetes-dashboard-amd64:v1.6.3",
-
-	// DNS
-	"gcr.io/google_containers/k8s-dns-kube-dns-amd64:1.14.5",
-	"gcr.io/google_containers/k8s-dns-dnsmasq-nanny-amd64:1.14.5",
-	"gcr.io/google_containers/k8s-dns-sidecar-amd64:1.14.5",
-
-	// Addon Manager
-	"gcr.io/google-containers/kube-addon-manager:v6.4-beta.2",
-
-	// Pause
-	"gcr.io/google_containers/pause-amd64:3.0",
-
-	//Storage Provisioner
-	"gcr.io/k8s-minikube/storage-provisioner:v1.8.0",
-}
-
-func GetKubeadmCachedImages(version string) []string {
-	return []string{
-		// Dashboard
-		"gcr.io/google_containers/kubernetes-dashboard-amd64:v1.6.3",
-
-		// Addon Manager
-		"gcr.io/google-containers/kube-addon-manager:v6.4-beta.2",
-
-		// Pause
-		"gcr.io/google_containers/pause-amd64:3.0",
-
-		// DNS
-		"gcr.io/google_containers/k8s-dns-kube-dns-amd64:1.14.4",
-		"gcr.io/google_containers/k8s-dns-dnsmasq-nanny-amd64:1.14.4",
-		"gcr.io/google_containers/k8s-dns-sidecar-amd64:1.14.4",
-
-		// etcd
-		"gcr.io/google_containers/etcd-amd64:3.0.17",
-
-		"gcr.io/google_containers/kube-proxy-amd64:" + version,
-		"gcr.io/google_containers/kube-scheduler-amd64:" + version,
-		"gcr.io/google_containers/kube-controller-manager-amd64:" + version,
-		"gcr.io/google_containers/kube-apiserver-amd64:" + version,
-
-		//Storage Provisioner
-		"gcr.io/k8s-minikube/storage-provisioner:v1.8.0",
-	}
-}
-
-var ImageCacheDir = MakeMiniPath("cache", "images")

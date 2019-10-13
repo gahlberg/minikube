@@ -1,4 +1,4 @@
-// +build darwin,!gendocs
+// +build darwin, !gendocs
 
 /*
 Copyright 2016 The Kubernetes Authors All rights reserved.
@@ -18,11 +18,14 @@ limitations under the License.
 
 package constants
 
-var SupportedVMDrivers = [...]string{
-	"virtualbox",
-	"xhyve",
-	"vmwarefusion",
-	"hyperkit",
-}
-
+// DefaultMountDir is the default mounting directory for Darwin
 var DefaultMountDir = "/Users"
+
+// SupportedVMDrivers is a list of supported drivers on Darwin.
+var SupportedVMDrivers = [...]string{
+	DriverVirtualbox,
+	DriverParallels,
+	DriverVmwareFusion,
+	DriverHyperkit,
+	DriverVmware,
+}

@@ -1,4 +1,4 @@
-// +build windows,!gendocs
+// +build windows, !gendocs
 
 /*
 Copyright 2016 The Kubernetes Authors All rights reserved.
@@ -22,9 +22,12 @@ import (
 	"k8s.io/client-go/util/homedir"
 )
 
-var SupportedVMDrivers = [...]string{
-	"virtualbox",
-	"hyperv",
-}
-
 var DefaultMountDir = homedir.HomeDir()
+
+// SupportedVMDrivers is a list of supported drivers on Windows.
+var SupportedVMDrivers = [...]string{
+	DriverVirtualbox,
+	DriverVmwareFusion,
+	DriverHyperv,
+	DriverVmware,
+}

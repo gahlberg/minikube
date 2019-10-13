@@ -17,14 +17,18 @@ limitations under the License.
 package cmd
 
 import (
-	"fmt"
 	"os"
 
-	"github.com/golang/glog"
-	"github.com/pkg/errors"
+	"github.com/docker/machine/libmachine/ssh"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+
 	"k8s.io/minikube/pkg/minikube/cluster"
+	"k8s.io/minikube/pkg/minikube/config"
+	"k8s.io/minikube/pkg/minikube/constants"
+	"k8s.io/minikube/pkg/minikube/exit"
 	"k8s.io/minikube/pkg/minikube/machine"
+	"k8s.io/minikube/pkg/minikube/out"
 )
 
 // sshCmd represents the docker-ssh command
@@ -35,27 +39,32 @@ var sshCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		api, err := machine.NewAPIClient()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error getting client: %s\n", err)
-			os.Exit(1)
+			exit.WithError("Error getting client", err)
 		}
 		defer api.Close()
-		host, err := cluster.CheckIfApiExistsAndLoad(api)
+		host, err := cluster.CheckIfHostExistsAndLoad(api, config.GetMachineName())
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error getting host: %s\n", err)
-			os.Exit(1)
+			exit.WithError("Error getting host", err)
 		}
-		if host.Driver.DriverName() == "none" {
-			fmt.Println(`'none' driver does not support 'minikube ssh' command`)
-			os.Exit(0)
+		if host.Driver.DriverName() == constants.DriverNone {
+			exit.UsageT("'none' driver does not support 'minikube ssh' command")
 		}
+		if viper.GetBool(nativeSSH) {
+			ssh.SetDefaultClient(ssh.Native)
+		} else {
+			ssh.SetDefaultClient(ssh.External)
+		}
+
 		err = cluster.CreateSSHShell(api, args)
 		if err != nil {
-			glog.Errorln(errors.Wrap(err, "Error attempting to ssh/run-ssh-command"))
-			os.Exit(1)
+			// This is typically due to a non-zero exit code, so no need for flourish.
+			out.ErrLn("ssh: %v", err)
+			// It'd be nice if we could pass up the correct error code here :(
+			os.Exit(exit.Failure)
 		}
 	},
 }
 
 func init() {
-	RootCmd.AddCommand(sshCmd)
+	sshCmd.Flags().Bool(nativeSSH, true, "Use native Golang SSH client (default true). Set to 'false' to use the command line 'ssh' command when accessing the docker machine. Useful for the machine drivers when they will not start with 'Waiting for SSH'.")
 }

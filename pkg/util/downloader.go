@@ -17,27 +17,30 @@ limitations under the License.
 package util
 
 import (
-	"crypto"
-	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 
 	"github.com/golang/glog"
-	download "github.com/jimmidyson/go-download"
+	"github.com/hashicorp/go-getter"
 	"github.com/pkg/errors"
 	"k8s.io/minikube/pkg/minikube/constants"
+	"k8s.io/minikube/pkg/minikube/localpath"
+	"k8s.io/minikube/pkg/minikube/out"
 )
 
 const fileScheme = "file"
 
+// ISODownloader downloads an ISO
 type ISODownloader interface {
 	GetISOFileURI(isoURL string) string
 	CacheMinikubeISOFromURL(isoURL string) error
 }
 
+// DefaultDownloader is the default ISODownloader
 type DefaultDownloader struct{}
 
+// GetISOFileURI gets the local destination for a remote source
 func (f DefaultDownloader) GetISOFileURI(isoURL string) string {
 	urlObj, err := url.Parse(isoURL)
 	if err != nil {
@@ -46,42 +49,46 @@ func (f DefaultDownloader) GetISOFileURI(isoURL string) string {
 	if urlObj.Scheme == fileScheme {
 		return isoURL
 	}
-	isoPath := filepath.Join(constants.GetMinipath(), "cache", "iso", filepath.Base(isoURL))
+	isoPath := filepath.Join(localpath.MiniPath(), "cache", "iso", filepath.Base(isoURL))
 	// As this is a file URL there should be no backslashes regardless of platform running on.
 	return "file://" + filepath.ToSlash(isoPath)
 }
 
-func (f DefaultDownloader) CacheMinikubeISOFromURL(isoURL string) error {
-	if !f.ShouldCacheMinikubeISO(isoURL) {
-		glog.Infof("Not caching ISO, using %s", isoURL)
+// CacheMinikubeISOFromURL downloads the ISO, if it doesn't exist in cache
+func (f DefaultDownloader) CacheMinikubeISOFromURL(url string) error {
+	if !f.ShouldCacheMinikubeISO(url) {
+		glog.Infof("Not caching ISO, using %s", url)
 		return nil
 	}
 
-	options := download.FileOptions{
-		Mkdirs: download.MkdirAll,
-		Options: download.Options{
-			ProgressBars: &download.ProgressBarOptions{
-				MaxWidth: 80,
-			},
-		},
+	urlWithChecksum := url
+	if url == constants.DefaultISOURL {
+		urlWithChecksum = url + "?checksum=file:" + constants.DefaultISOSHAURL
 	}
 
-	// Validate the ISO if it was the default URL, before writing it to disk.
-	if isoURL == constants.DefaultIsoUrl {
-		options.Checksum = constants.DefaultIsoShaUrl
-		options.ChecksumHash = crypto.SHA256
+	dst := f.GetISOCacheFilepath(url)
+	// Predictable temp destination so that resume can function
+	tmpDst := dst + ".download"
+
+	opts := []getter.ClientOption{getter.WithProgress(DefaultProgressBar)}
+	client := &getter.Client{
+		Src:     urlWithChecksum,
+		Dst:     tmpDst,
+		Mode:    getter.ClientModeFile,
+		Options: opts,
 	}
 
-	fmt.Println("Downloading Minikube ISO")
-	if err := download.ToFile(isoURL, f.GetISOCacheFilepath(isoURL), options); err != nil {
-		return errors.Wrap(err, "Error downloading Minikube ISO")
+	glog.Infof("full url: %s", urlWithChecksum)
+	out.T(out.ISODownload, "Downloading VM boot image ...")
+	if err := client.Get(); err != nil {
+		return errors.Wrap(err, url)
 	}
-
-	return nil
+	return os.Rename(tmpDst, dst)
 }
 
+// ShouldCacheMinikubeISO returns if we need to download the ISO
 func (f DefaultDownloader) ShouldCacheMinikubeISO(isoURL string) bool {
-	// store the miniube-iso inside the .minikube dir
+	// store the minikube-iso inside the .minikube dir
 
 	urlObj, err := url.Parse(isoURL)
 	if err != nil {
@@ -96,10 +103,12 @@ func (f DefaultDownloader) ShouldCacheMinikubeISO(isoURL string) bool {
 	return true
 }
 
+// GetISOCacheFilepath returns the path of an ISO in the local cache
 func (f DefaultDownloader) GetISOCacheFilepath(isoURL string) string {
-	return filepath.Join(constants.GetMinipath(), "cache", "iso", filepath.Base(isoURL))
+	return filepath.Join(localpath.MiniPath(), "cache", "iso", filepath.Base(isoURL))
 }
 
+// IsMinikubeISOCached returns if an ISO exists in the local cache
 func (f DefaultDownloader) IsMinikubeISOCached(isoURL string) bool {
 	if _, err := os.Stat(f.GetISOCacheFilepath(isoURL)); os.IsNotExist(err) {
 		return false

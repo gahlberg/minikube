@@ -17,19 +17,22 @@ limitations under the License.
 package config
 
 import (
+	"fmt"
 	"testing"
 
+	"k8s.io/minikube/pkg/minikube/assets"
 	pkgConfig "k8s.io/minikube/pkg/minikube/config"
+	"k8s.io/minikube/pkg/minikube/constants"
 )
 
 var minikubeConfig = pkgConfig.MinikubeConfig{
-	"vm-driver":            "kvm",
+	"vm-driver":            constants.DriverKvm2,
 	"cpus":                 12,
 	"show-libmachine-logs": true,
 }
 
 func TestFindSettingNotFound(t *testing.T) {
-	s, err := findSetting("nonexistant")
+	s, err := findSetting("nonexistent")
 	if err == nil {
 		t.Fatalf("Shouldn't have found setting, but did. [%+v]", s)
 	}
@@ -38,7 +41,7 @@ func TestFindSettingNotFound(t *testing.T) {
 func TestFindSetting(t *testing.T) {
 	s, err := findSetting("vm-driver")
 	if err != nil {
-		t.Fatalf("Couldn't find setting, vm-driver: %s", err)
+		t.Fatalf("Couldn't find setting, vm-driver: %v", err)
 	}
 	if s.name != "vm-driver" {
 		t.Fatalf("Found wrong setting, expected vm-driver, got %s", s.name)
@@ -46,16 +49,16 @@ func TestFindSetting(t *testing.T) {
 }
 
 func TestSetString(t *testing.T) {
-	err := SetString(minikubeConfig, "vm-driver", "virtualbox")
+	err := SetString(minikubeConfig, "vm-driver", constants.DriverVirtualbox)
 	if err != nil {
-		t.Fatalf("Couldnt set string: %s", err)
+		t.Fatalf("Couldn't set string: %v", err)
 	}
 }
 
 func TestSetInt(t *testing.T) {
 	err := SetInt(minikubeConfig, "cpus", "22")
 	if err != nil {
-		t.Fatalf("Couldn't set int in config: %s", err)
+		t.Fatalf("Couldn't set int in config: %v", err)
 	}
 	val, ok := minikubeConfig["cpus"].(int)
 	if !ok {
@@ -69,7 +72,7 @@ func TestSetInt(t *testing.T) {
 func TestSetBool(t *testing.T) {
 	err := SetBool(minikubeConfig, "show-libmachine-logs", "true")
 	if err != nil {
-		t.Fatalf("Couldn't set bool in config: %s", err)
+		t.Fatalf("Couldn't set bool in config: %v", err)
 	}
 	val, ok := minikubeConfig["show-libmachine-logs"].(bool)
 	if !ok {
@@ -77,5 +80,58 @@ func TestSetBool(t *testing.T) {
 	}
 	if !val {
 		t.Fatalf("SetBool set wrong value")
+	}
+}
+
+func TestIsAddonAlreadySet(t *testing.T) {
+	testCases := []struct {
+		addonName string
+		expectErr string
+	}{
+		{
+			addonName: "ingress",
+			expectErr: "addon ingress was already ",
+		},
+		{
+			addonName: "heapster",
+			expectErr: "addon heapster was already ",
+		},
+	}
+
+	for _, test := range testCases {
+		addon := assets.Addons[test.addonName]
+		addonStatus, _ := addon.IsEnabled()
+
+		expectMsg := test.expectErr + "enabled"
+		if !addonStatus {
+			expectMsg = test.expectErr + "disabled"
+		}
+		err := isAddonAlreadySet(addon, addonStatus)
+		if err.Error() != expectMsg {
+			t.Errorf("Did not get expected error, \n\n expected: %+v \n\n actual: %+v", expectMsg, err)
+		}
+	}
+}
+
+func TestValidateProfile(t *testing.T) {
+	testCases := []struct {
+		profileName string
+	}{
+		{
+			profileName: "82374328742_2974224498",
+		},
+		{
+			profileName: "minikube",
+		},
+	}
+
+	for _, test := range testCases {
+		profileNam := test.profileName
+		expectedMsg := fmt.Sprintf("profile %q not found", test.profileName)
+
+		err, ok := ValidateProfile(profileNam)
+		if !ok && err.Error() != expectedMsg {
+			t.Errorf("Didnt receive expected message")
+		}
 	}
 }

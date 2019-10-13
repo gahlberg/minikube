@@ -17,15 +17,14 @@ limitations under the License.
 package config
 
 import (
-	"fmt"
-	"os"
 	"text/template"
 
 	"github.com/spf13/cobra"
 	"k8s.io/minikube/pkg/minikube/assets"
 	"k8s.io/minikube/pkg/minikube/cluster"
-	"k8s.io/minikube/pkg/minikube/constants"
+	"k8s.io/minikube/pkg/minikube/exit"
 	"k8s.io/minikube/pkg/minikube/machine"
+	"k8s.io/minikube/pkg/minikube/out"
 	"k8s.io/minikube/pkg/minikube/service"
 )
 
@@ -47,43 +46,37 @@ var addonsOpenCmd = &cobra.Command{
 	PreRun: func(cmd *cobra.Command, args []string) {
 		t, err := template.New("addonsURL").Parse(addonsURLFormat)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "The value passed to --format is invalid:\n\n", err)
-			os.Exit(1)
+			exit.UsageT("The value passed to --format is invalid: {{.error}}", out.V{"error": err})
 		}
 		addonsURLTemplate = t
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		if len(args) != 1 {
-			fmt.Fprintln(os.Stderr, "usage: minikube addons open ADDON_NAME")
-			os.Exit(1)
+			exit.UsageT("usage: minikube addons open ADDON_NAME")
 		}
 		addonName := args[0]
-		//TODO(r2d4): config should not reference API, pull this out
+		// TODO(r2d4): config should not reference API, pull this out
 		api, err := machine.NewAPIClient()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error getting client: %s\n", err)
-			os.Exit(1)
+			exit.WithError("Error getting client", err)
 		}
 		defer api.Close()
 
 		cluster.EnsureMinikubeRunningOrExit(api, 1)
 		addon, ok := assets.Addons[addonName] // validate addon input
 		if !ok {
-			fmt.Fprintln(os.Stderr, fmt.Sprintf(`addon '%s' is not a valid addon packaged with minikube.
+			exit.WithCodeT(exit.Data, `addon '{{.name}}' is not a valid addon packaged with minikube.
 To see the list of available addons run:
-minikube addons list`, addonName))
-			os.Exit(1)
+minikube addons list`, out.V{"name": addonName})
 		}
 		ok, err = addon.IsEnabled()
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err.Error())
-			os.Exit(1)
+			exit.WithError("IsEnabled failed", err)
 		}
 		if !ok {
-			fmt.Fprintln(os.Stderr, fmt.Sprintf(`addon '%s' is currently not enabled.
+			exit.WithCodeT(exit.Unavailable, `addon '{{.name}}' is currently not enabled.
 To enable this addon run:
-minikube addons enable %s`, addonName, addonName))
-			os.Exit(1)
+minikube addons enable {{.name}}`, out.V{"name": addonName})
 		}
 
 		namespace := "kube-system"
@@ -91,21 +84,17 @@ minikube addons enable %s`, addonName, addonName))
 
 		serviceList, err := service.GetServiceListByLabel(namespace, key, addonName)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error getting service with namespace: %s and labels %s:%s: %s\n", namespace, key, addonName, err)
-			os.Exit(1)
+			exit.WithCodeT(exit.Unavailable, "Error getting service with namespace: {{.namespace}} and labels {{.labelName}}:{{.addonName}}: {{.error}}", out.V{"namespace": namespace, "labelName": key, "addonName": addonName, "error": err})
 		}
 		if len(serviceList.Items) == 0 {
-			fmt.Fprintf(os.Stdout, `
-This addon does not have an endpoint defined for the 'addons open' command
-You can add one by annotating a service with the label %s:%s
-`, key, addonName)
-			os.Exit(0)
+			exit.WithCodeT(exit.Config, `This addon does not have an endpoint defined for the 'addons open' command.
+You can add one by annotating a service with the label {{.labelName}}:{{.addonName}}`, out.V{"labelName": key, "addonName": addonName})
 		}
 		for i := range serviceList.Items {
 			svc := serviceList.Items[i].ObjectMeta.Name
-			service.WaitAndMaybeOpenService(api, namespace, svc, addonsURLTemplate,
-				addonsURLMode, https, wait, interval)
-
+			if err := service.WaitAndMaybeOpenService(api, namespace, svc, addonsURLTemplate, addonsURLMode, https, wait, interval); err != nil {
+				exit.WithCodeT(exit.Unavailable, "Wait failed: {{.error}}", out.V{"error": err})
+			}
 		}
 	},
 }
@@ -113,8 +102,8 @@ You can add one by annotating a service with the label %s:%s
 func init() {
 	addonsOpenCmd.Flags().BoolVar(&addonsURLMode, "url", false, "Display the kubernetes addons URL in the CLI instead of opening it in the default browser")
 	addonsOpenCmd.Flags().BoolVar(&https, "https", false, "Open the addons URL with https instead of http")
-	addonsOpenCmd.Flags().IntVar(&wait, "wait", constants.DefaultWait, "Amount of time to wait for service in seconds")
-	addonsOpenCmd.Flags().IntVar(&interval, "interval", constants.DefaultInterval, "The time interval for each check that wait performs in seconds")
+	addonsOpenCmd.Flags().IntVar(&wait, "wait", service.DefaultWait, "Amount of time to wait for service in seconds")
+	addonsOpenCmd.Flags().IntVar(&interval, "interval", service.DefaultInterval, "The time interval for each check that wait performs in seconds")
 	addonsOpenCmd.PersistentFlags().StringVar(&addonsURLFormat, "format", defaultAddonsFormatTemplate, "Format to output addons URL in.  This format will be applied to each url individually and they will be printed one at a time.")
 	AddonsCmd.AddCommand(addonsOpenCmd)
 }

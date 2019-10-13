@@ -20,94 +20,252 @@
 # The script expects the following env variables:
 # OS_ARCH: The operating system and the architecture separated by a hyphen '-' (e.g. darwin-amd64, linux-amd64, windows-amd64)
 # VM_DRIVER: the vm-driver to use for the test
-# EXTRA_BUILD_ARGS: additional flags to pass into minikube start
+# EXTRA_START_ARGS: additional flags to pass into minikube start
+# EXTRA_ARGS: additional flags to pass into minikube
 # JOB_NAME: the name of the logfile and check name to update on github
+# PARALLEL_COUNT: number of tests to run in parallel
 
 
-# Copy only the files we need to this workspace
+readonly TEST_ROOT="${HOME}/minikube-integration"
+readonly TEST_HOME="${TEST_ROOT}/${OS_ARCH}-${VM_DRIVER}-${MINIKUBE_LOCATION}-$$-${COMMIT}"
+echo ">> Starting at $(date)"
+echo ""
+echo "arch:      ${OS_ARCH}"
+echo "build:     ${MINIKUBE_LOCATION}"
+echo "driver:    ${VM_DRIVER}"
+echo "job:       ${JOB_NAME}"
+echo "test home: ${TEST_HOME}"
+echo "sudo:      ${SUDO_PREFIX}"
+echo "kernel:    $(uname -v)"
+# Setting KUBECONFIG prevents the version ceck from erroring out due to permission issues
+echo "kubectl:   $(env KUBECONFIG=${TEST_HOME} kubectl version --client --short=true)"
+echo "docker:    $(docker version --format '{{ .Client.Version }}')"
+
+case "${VM_DRIVER}" in
+  kvm2)
+    echo "virsh:     $(virsh --version)"
+  ;;
+  virtualbox)
+    echo "vbox:      $(vboxmanage --version)"
+  ;;
+esac
+
+echo ""
 mkdir -p out/ testdata/
-gsutil cp gs://minikube-builds/${MINIKUBE_LOCATION}/minikube-${OS_ARCH} out/
-gsutil cp gs://minikube-builds/${MINIKUBE_LOCATION}/localkube out/
-gsutil cp gs://minikube-builds/${MINIKUBE_LOCATION}/docker-machine-driver-* out/
-gsutil cp gs://minikube-builds/${MINIKUBE_LOCATION}/e2e-${OS_ARCH} out/
-gsutil cp gs://minikube-builds/${MINIKUBE_LOCATION}/testdata/busybox.yaml testdata/
-gsutil cp gs://minikube-builds/${MINIKUBE_LOCATION}/testdata/pvc.yaml testdata/
-gsutil cp gs://minikube-builds/${MINIKUBE_LOCATION}/testdata/busybox-mount-test.yaml testdata/
 
-export MINIKUBE_WANTREPORTERRORPROMPT=False
-sudo ./out/minikube-${OS_ARCH} delete || true
-./out/minikube-${OS_ARCH} delete || true
+# Install gsutil if necessary.
+if ! type -P gsutil >/dev/null; then
+  if [[ ! -x "out/gsutil/gsutil" ]]; then
+    echo "Installing gsutil to $(pwd)/out ..."
+    curl -s https://storage.googleapis.com/pub/gsutil.tar.gz | tar -C out/ -zxf -
+  fi
+  PATH="$(pwd)/out/gsutil:$PATH"
+fi
 
 # Add the out/ directory to the PATH, for using new drivers.
-export PATH="$(pwd)/out/":$PATH
+PATH="$(pwd)/out/":$PATH
+export PATH
 
-# Linux cleanup
-virsh -c qemu:///system list --all \
-      | sed -n '3,$ p' \
-      | cut -d' ' -f 7 \
-      | xargs -I {} sh -c "virsh -c qemu:///system destroy {}; virsh -c qemu:///system undefine {}"  \
-      || true
+echo ""
+echo ">> Downloading test inputs from ${MINIKUBE_LOCATION} ..."
+gsutil -qm cp \
+  "gs://minikube-builds/${MINIKUBE_LOCATION}/minikube-${OS_ARCH}" \
+  "gs://minikube-builds/${MINIKUBE_LOCATION}/docker-machine-driver"-* \
+  "gs://minikube-builds/${MINIKUBE_LOCATION}/e2e-${OS_ARCH}" out
 
-# Clean up virtualbox VMs
-vboxmanage list vms \
-      | cut -d "{" -f2 \
-      | cut -d "}" -f1 \
-      | xargs -I {} sh -c "vboxmanage unregistervm {} --delete" \
-      || true
+gsutil -qm cp -r "gs://minikube-builds/${MINIKUBE_LOCATION}/testdata"/* testdata/
 
-# Clean up xhyve disks
-hdiutil info \
-      | egrep \/dev\/disk[1-9][^s] \
+gsutil -qm cp "gs://minikube-builds/${MINIKUBE_LOCATION}/gvisor-addon" testdata/
+
+
+# Set the executable bit on the e2e binary and out binary
+export MINIKUBE_BIN="out/minikube-${OS_ARCH}"
+export E2E_BIN="out/e2e-${OS_ARCH}"
+chmod +x "${MINIKUBE_BIN}" "${E2E_BIN}" out/docker-machine-driver-*
+
+procs=$(pgrep "minikube-${OS_ARCH}|e2e-${OS_ARCH}" || true)
+if [[ "${procs}" != "" ]]; then
+  echo "Warning: found stale test processes to kill:"
+  ps -f -p ${procs} || true
+  kill ${procs} || true
+  kill -9 ${procs} || true
+fi
+
+# Quickly notice misconfigured test roots
+mkdir -p "${TEST_ROOT}"
+
+# Cleanup stale test outputs.
+echo ""
+echo ">> Cleaning up after previous test runs ..."
+for entry in $(ls ${TEST_ROOT}); do
+  echo "* Cleaning stale test path: ${entry}"
+  for tunnel in $(find ${entry} -name tunnels.json -type f); do
+    env MINIKUBE_HOME="$(dirname ${tunnel})" ${MINIKUBE_BIN} tunnel --cleanup || true
+  done
+
+  for home in $(find ${entry} -name .minikube -type d); do
+    env MINIKUBE_HOME="$(dirname ${home})" ${MINIKUBE_BIN} delete || true
+    sudo rm -Rf "${home}"
+  done
+
+  for kconfig in $(find ${entry} -name kubeconfig -type f); do
+    sudo rm -f "${kconfig}"
+  done
+
+  # Be very specific to avoid accidentally deleting other items, like wildcards or devices
+  if [[ -d "${entry}" ]]; then
+    rm -Rf "${entry}" || true
+  elif [[ -f "${entry}" ]]; then
+    rm -f "${entry}" || true
+  fi
+
+done
+
+# sometimes tests left over zombie procs that won't exit
+# for example:
+# jenkins  20041  0.0  0.0      0     0 ?        Z    Aug19   0:00 [minikube-linux-] <defunct>
+zombie_defuncts=$(ps -A -ostat,ppid | awk '/[zZ]/ && !a[$2]++ {print $2}')
+if [[ "${zombie_defuncts}" != "" ]]; then
+  echo "Found zombie defunct procs to kill..."
+  ps -f -p ${zombie_defuncts} || true
+  kill ${zombie_defuncts} || true
+fi
+
+if type -P virsh; then
+  virsh -c qemu:///system list --all --uuid \
+    | xargs -I {} sh -c "virsh -c qemu:///system destroy {}; virsh -c qemu:///system undefine {}" \
+    || true
+  echo ">> virsh VM list after clean up (should be empty):"
+  virsh -c qemu:///system list --all || true
+fi
+
+if type -P vboxmanage; then
+  for guid in $(vboxmanage list vms | egrep -Eo '\{[-a-Z0-9]+\}'); do
+    echo "- Removing stale VirtualBox VM: $guid"
+    vboxmanage startvm $guid --type emergencystop || true
+    vboxmanage unregistervm $guid || true
+  done
+
+  vboxmanage list hostonlyifs \
+    | grep "^Name:" \
+    | awk '{ print $2 }' \
+    | xargs -n1 vboxmanage hostonlyif remove || true
+
+  echo ">> VirtualBox VM list after clean up (should be empty):"
+  vboxmanage list vms || true
+fi
+
+
+if type -P hdiutil; then
+  hdiutil info | grep -E "/dev/disk[1-9][^s]" || true
+  hdiutil info \
+      | grep -E "/dev/disk[1-9][^s]" \
       | awk '{print $1}' \
       | xargs -I {} sh -c "hdiutil detach {}" \
       || true
-
-# Clean up xhyve processes
-pgrep xhyve | xargs kill || true
-
-# Set the executable bit on the e2e binary and out binary
-chmod +x out/e2e-${OS_ARCH}
-chmod +x out/minikube-${OS_ARCH}
-chmod +x out/docker-machine-driver-*
-
-if [ -e out/docker-machine-driver-hyperkit ]; then
-  sudo chown root:wheel out/docker-machine-driver-hyperkit || true
-  sudo chmod u+s out/docker-machine-driver-hyperkit || true
 fi
 
-# See the default image
-./out/minikube-${OS_ARCH} start -h | grep iso
+# cleaning up stale hyperkits
+if type -P hyperkit; then
+  for pid in $(pgrep hyperkit); do
+    echo "Killing stale hyperkit $pid"
+    ps -f -p $pid || true
+    kill $pid || true
+    kill -9 $pid || true
+  done
+fi
 
-# see what driver we are using
-which docker-machine-driver-${VM_DRIVER} || true
-find ~/.minikube || true
+if [[ "${VM_DRIVER}" == "hyperkit" ]]; then
+  if [[ -e out/docker-machine-driver-hyperkit ]]; then
+    sudo chown root:wheel out/docker-machine-driver-hyperkit || true
+    sudo chmod u+s out/docker-machine-driver-hyperkit || true
+  fi
+fi
 
-# Allow this to fail, we'll switch on the return code below.
-set +e
-${SUDO_PREFIX}out/e2e-${OS_ARCH} -minikube-start-args="--vm-driver=${VM_DRIVER} ${EXTRA_START_ARGS}" -minikube-args="--v=10 --logtostderr ${EXTRA_ARGS}" -test.v -test.timeout=30m -binary=out/minikube-${OS_ARCH}
-result=$?
-set -e
+kprocs=$(pgrep kubectl || true)
+if [[ "${kprocs}" != "" ]]; then
+  echo "error: killing hung kubectl processes ..."
+  ps -f -p ${kprocs} || true
+  sudo -E kill ${kprocs} || true
+fi
 
-# See the KUBECONFIG file for debugging
-sudo cat $KUBECONFIG
+# clean up none drivers binding on 8443
+  none_procs=$(sudo lsof -i :8443 | tail -n +2 | awk '{print $2}' || true)
+  if [[ "${none_procs}" != "" ]]; then
+    echo "Found stale api servers listening on 8443 processes to kill: "
+    for p in $none_procs
+    do
+    echo "Kiling stale none driver:  $p"
+    sudo -E ps -f -p $p || true
+    sudo -E kill $p || true
+    sudo -E kill -9 $p || true
+    done
+  fi
 
-MINIKUBE_WANTREPORTERRORPROMPT=False sudo ./out/minikube-${OS_ARCH} delete \
-|| MINIKUBE_WANTREPORTERRORPROMPT=False ./out/minikube-${OS_ARCH} delete \
-|| true
+function cleanup_stale_routes() {
+  local show="netstat -rn -f inet"
+  local del="sudo route -n delete"
+
+  if [[ "$(uname)" == "Linux" ]]; then
+    show="ip route show"
+    del="sudo ip route delete"
+  fi
+
+  local troutes=$($show | awk '{ print $1 }' | grep 10.96.0.0 || true)
+  for route in ${troutes}; do
+    echo "WARNING: deleting stale tunnel route: ${route}"
+    $del "${route}" || true
+  done
+}
+
+cleanup_stale_routes || true
+
+mkdir -p "${TEST_HOME}"
+export MINIKUBE_HOME="${TEST_HOME}/.minikube"
+export KUBECONFIG="${TEST_HOME}/kubeconfig"
+
+# Build the gvisor image. This will be copied into minikube and loaded by ctr.
+# Used by TestContainerd for Gvisor Test.
+# TODO: move this to integration test setup.
+chmod +x ./testdata/gvisor-addon
+# skipping gvisor mac because ofg https://github.com/kubernetes/minikube/issues/5137
+if [ "$(uname)" != "Darwin" ]; then
+  docker build -t gcr.io/k8s-minikube/gvisor-addon:latest -f testdata/gvisor-addon-Dockerfile ./testdata
+fi
+
+echo ""
+echo ">> Starting ${E2E_BIN} at $(date)"
+${SUDO_PREFIX}${E2E_BIN} \
+  -minikube-start-args="--vm-driver=${VM_DRIVER} ${EXTRA_START_ARGS}" \
+  -test.timeout=60m \
+  -test.parallel=${PARALLEL_COUNT} \
+  -binary="${MINIKUBE_BIN}" && result=$? || result=$?
+echo ">> ${E2E_BIN} exited with ${result} at $(date)"
+echo ""
 
 if [[ $result -eq 0 ]]; then
   status="success"
+  echo "minikube: SUCCESS"
 else
   status="failure"
-  source print-debug-info.sh
+  echo "minikube: FAIL"
 fi
 
-set +x
-target_url="https://storage.googleapis.com/minikube-builds/logs/${MINIKUBE_LOCATION}/${JOB_NAME}.txt"
-curl "https://api.github.com/repos/kubernetes/minikube/statuses/${COMMIT}?access_token=$access_token" \
+echo ">> Cleaning up after ourselves ..."
+${SUDO_PREFIX}${MINIKUBE_BIN} tunnel --cleanup || true
+${SUDO_PREFIX}${MINIKUBE_BIN} delete >/dev/null 2>/dev/null || true
+cleanup_stale_routes || true
+
+${SUDO_PREFIX} rm -Rf "${MINIKUBE_HOME}" || true
+${SUDO_PREFIX} rm -f "${KUBECONFIG}" || true
+rmdir "${TEST_HOME}"
+echo ">> ${TEST_HOME} completed at $(date)"
+
+if [[ "${MINIKUBE_LOCATION}" != "master" ]]; then
+  readonly target_url="https://storage.googleapis.com/minikube-builds/logs/${MINIKUBE_LOCATION}/${JOB_NAME}.txt"
+  curl -s "https://api.github.com/repos/kubernetes/minikube/statuses/${COMMIT}?access_token=$access_token" \
   -H "Content-Type: application/json" \
   -X POST \
   -d "{\"state\": \"$status\", \"description\": \"Jenkins\", \"target_url\": \"$target_url\", \"context\": \"${JOB_NAME}\"}"
-set -x
-
+fi
 exit $result

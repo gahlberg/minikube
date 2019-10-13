@@ -104,7 +104,7 @@ func TestFindNestedStrings(t *testing.T) {
 	} {
 		v, err := findNestedElement(tc.input, &a)
 		if err != nil {
-			t.Fatalf("Did not expect error. Got: %s", err)
+			t.Fatalf("Did not expect error. Got: %v", err)
 		}
 		if v.String() != tc.output {
 			t.Fatalf("Expected: %s, got %s", tc.output, v.String())
@@ -126,7 +126,7 @@ func TestFindNestedInts(t *testing.T) {
 	} {
 		v, err := findNestedElement(tc.input, &a)
 		if err != nil {
-			t.Fatalf("Did not expect error. Got: %s", err)
+			t.Fatalf("Did not expect error. Got: %v", err)
 		}
 		if v.Int() != tc.output {
 			t.Fatalf("Expected: %d, got %d", tc.output, v.Int())
@@ -151,7 +151,7 @@ func TestFindNestedFloats(t *testing.T) {
 	} {
 		v, err := findNestedElement(tc.input, &a)
 		if err != nil {
-			t.Fatalf("Did not expect error. Got: %s", err)
+			t.Fatalf("Did not expect error. Got: %v", err)
 		}
 
 		// Floating point comparison is tricky.
@@ -176,8 +176,8 @@ func TestSetElement(t *testing.T) {
 		{"E.J", "otherstring", func(t testConfig) bool { return t.E.J == "otherstring" }},
 		{"E.K", "17", func(t testConfig) bool { return t.E.K == 17 }},
 		{"E.L", "1.234", func(t testConfig) bool { return checkFloats(float64(t.E.L), 1.234) }},
-		{"D.I.P", "true", func(t testConfig) bool { return bool(t.D.I.P) == true }},
-		{"D.I.P", "false", func(t testConfig) bool { return bool(t.D.I.P) == false }},
+		{"D.I.P", "true", func(t testConfig) bool { return t.D.I.P == true }},
+		{"D.I.P", "false", func(t testConfig) bool { return t.D.I.P == false }},
 		{"D.I.Q", "11.22.33.44", func(t testConfig) bool { return t.D.I.Q.Equal(net.ParseIP("11.22.33.44")) }},
 		{"D.I.R", "7-11", func(t testConfig) bool { return t.D.I.R.Base == 7 && t.D.I.R.Size == 5 }},
 		{"D.I.S", "a,b", func(t testConfig) bool { return reflect.DeepEqual(t.D.I.S, []string{"a", "b"}) }},
@@ -187,7 +187,7 @@ func TestSetElement(t *testing.T) {
 	} {
 		a := buildConfig()
 		if err := FindAndSet(tc.path, &a, tc.newval); err != nil {
-			t.Fatalf("Error setting value: %s", err)
+			t.Fatalf("Error setting value: %v", err)
 		}
 		if !tc.checker(a) {
 			t.Fatalf("Error, values not correct: %v, %s, %s", a, tc.newval, tc.path)

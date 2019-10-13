@@ -194,7 +194,7 @@ func (u *Ufs) Wstat(req *SrvReq) {
 			destpath = path.Join(fiddir, dir.Name)
 			fmt.Printf("rel  results in %s\n", destpath)
 		}
-		err := syscall.Rename(fid.path, destpath)
+		err := os.Rename(fid.path, destpath)
 		fmt.Printf("rename %s to %s gets %v\n", fid.path, destpath, err)
 		if err != nil {
 			req.RespondError(toError(err))
@@ -225,7 +225,7 @@ func (u *Ufs) Wstat(req *SrvReq) {
 			case true:
 				mt = st.ModTime()
 			default:
-				//at = time.Time(0)//atime(st.Sys().(*syscall.Stat_t))
+				// at = time.Time(0)//atime(st.Sys().(*syscall.Stat_t))
 			}
 		}
 		// macOS filesystem st_mtime values are only accurate to the second

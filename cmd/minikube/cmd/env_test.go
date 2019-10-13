@@ -20,10 +20,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/docker/machine/libmachine"
 	"github.com/docker/machine/libmachine/host"
 	"k8s.io/minikube/pkg/minikube/config"
-	"k8s.io/minikube/pkg/minikube/constants"
+	"k8s.io/minikube/pkg/minikube/localpath"
 	"k8s.io/minikube/pkg/minikube/tests"
 )
 
@@ -45,10 +44,12 @@ func (f FakeNoProxyGetter) GetNoProxyVar() (string, string) {
 }
 
 var defaultAPI = &tests.MockAPI{
-	Hosts: map[string]*host.Host{
-		config.GetMachineName(): {
-			Name:   config.GetMachineName(),
-			Driver: &tests.MockDriver{},
+	FakeStore: tests.FakeStore{
+		Hosts: map[string]*host.Host{
+			config.GetMachineName(): {
+				Name:   config.GetMachineName(),
+				Driver: &tests.MockDriver{},
+			},
 		},
 	},
 }
@@ -56,21 +57,20 @@ var defaultAPI = &tests.MockAPI{
 // Most of the shell cfg isn't configurable
 func newShellCfg(shell, prefix, suffix, delim string) *ShellConfig {
 	return &ShellConfig{
-		DockerCertPath:   constants.MakeMiniPath("certs"),
-		DockerTLSVerify:  "1",
-		DockerHost:       "tcp://127.0.0.1:2376",
-		DockerAPIVersion: constants.DockerAPIVersion,
-		UsageHint:        generateUsageHint(shell),
-		Prefix:           prefix,
-		Suffix:           suffix,
-		Delimiter:        delim,
+		DockerCertPath:  localpath.MakeMiniPath("certs"),
+		DockerTLSVerify: "1",
+		DockerHost:      "tcp://127.0.0.1:2376",
+		UsageHint:       generateUsageHint(shell),
+		Prefix:          prefix,
+		Suffix:          suffix,
+		Delimiter:       delim,
 	}
 }
 
 func TestShellCfgSet(t *testing.T) {
 	var tests = []struct {
 		description      string
-		api              libmachine.API
+		api              *tests.MockAPI
 		shell            string
 		noProxyVar       string
 		noProxyValue     string
@@ -81,7 +81,9 @@ func TestShellCfgSet(t *testing.T) {
 		{
 			description: "no host specified",
 			api: &tests.MockAPI{
-				Hosts: make(map[string]*host.Host),
+				FakeStore: tests.FakeStore{
+					Hosts: make(map[string]*host.Host),
+				},
 			},
 			shell:            "bash",
 			expectedShellCfg: nil,
@@ -137,16 +139,15 @@ func TestShellCfgSet(t *testing.T) {
 			noProxyValue: "",
 			noProxyFlag:  true,
 			expectedShellCfg: &ShellConfig{
-				DockerCertPath:   constants.MakeMiniPath("certs"),
-				DockerTLSVerify:  "1",
-				DockerHost:       "tcp://127.0.0.1:2376",
-				DockerAPIVersion: constants.DockerAPIVersion,
-				UsageHint:        usageHintMap["bash"],
-				Prefix:           bashSetPfx,
-				Suffix:           bashSetSfx,
-				Delimiter:        bashSetDelim,
-				NoProxyVar:       "NO_PROXY",
-				NoProxyValue:     "127.0.0.1",
+				DockerCertPath:  localpath.MakeMiniPath("certs"),
+				DockerTLSVerify: "1",
+				DockerHost:      "tcp://127.0.0.1:2376",
+				UsageHint:       usageHintMap["bash"],
+				Prefix:          bashSetPfx,
+				Suffix:          bashSetSfx,
+				Delimiter:       bashSetDelim,
+				NoProxyVar:      "NO_PROXY",
+				NoProxyValue:    "127.0.0.1",
 			},
 		},
 		{
@@ -157,16 +158,15 @@ func TestShellCfgSet(t *testing.T) {
 			noProxyValue: "",
 			noProxyFlag:  true,
 			expectedShellCfg: &ShellConfig{
-				DockerCertPath:   constants.MakeMiniPath("certs"),
-				DockerTLSVerify:  "1",
-				DockerHost:       "tcp://127.0.0.1:2376",
-				DockerAPIVersion: constants.DockerAPIVersion,
-				UsageHint:        usageHintMap["bash"],
-				Prefix:           bashSetPfx,
-				Suffix:           bashSetSfx,
-				Delimiter:        bashSetDelim,
-				NoProxyVar:       "no_proxy",
-				NoProxyValue:     "127.0.0.1",
+				DockerCertPath:  localpath.MakeMiniPath("certs"),
+				DockerTLSVerify: "1",
+				DockerHost:      "tcp://127.0.0.1:2376",
+				UsageHint:       usageHintMap["bash"],
+				Prefix:          bashSetPfx,
+				Suffix:          bashSetSfx,
+				Delimiter:       bashSetDelim,
+				NoProxyVar:      "no_proxy",
+				NoProxyValue:    "127.0.0.1",
 			},
 		},
 		{
@@ -177,16 +177,15 @@ func TestShellCfgSet(t *testing.T) {
 			noProxyValue: "127.0.0.1",
 			noProxyFlag:  true,
 			expectedShellCfg: &ShellConfig{
-				DockerCertPath:   constants.MakeMiniPath("certs"),
-				DockerTLSVerify:  "1",
-				DockerHost:       "tcp://127.0.0.1:2376",
-				DockerAPIVersion: constants.DockerAPIVersion,
-				UsageHint:        usageHintMap["bash"],
-				Prefix:           bashSetPfx,
-				Suffix:           bashSetSfx,
-				Delimiter:        bashSetDelim,
-				NoProxyVar:       "no_proxy",
-				NoProxyValue:     "127.0.0.1",
+				DockerCertPath:  localpath.MakeMiniPath("certs"),
+				DockerTLSVerify: "1",
+				DockerHost:      "tcp://127.0.0.1:2376",
+				UsageHint:       usageHintMap["bash"],
+				Prefix:          bashSetPfx,
+				Suffix:          bashSetSfx,
+				Delimiter:       bashSetDelim,
+				NoProxyVar:      "no_proxy",
+				NoProxyValue:    "127.0.0.1",
 			},
 		},
 		{
@@ -197,16 +196,15 @@ func TestShellCfgSet(t *testing.T) {
 			noProxyValue: "0.0.0.0",
 			noProxyFlag:  true,
 			expectedShellCfg: &ShellConfig{
-				DockerCertPath:   constants.MakeMiniPath("certs"),
-				DockerTLSVerify:  "1",
-				DockerHost:       "tcp://127.0.0.1:2376",
-				DockerAPIVersion: constants.DockerAPIVersion,
-				UsageHint:        usageHintMap["bash"],
-				Prefix:           bashSetPfx,
-				Suffix:           bashSetSfx,
-				Delimiter:        bashSetDelim,
-				NoProxyVar:       "no_proxy",
-				NoProxyValue:     "0.0.0.0,127.0.0.1",
+				DockerCertPath:  localpath.MakeMiniPath("certs"),
+				DockerTLSVerify: "1",
+				DockerHost:      "tcp://127.0.0.1:2376",
+				UsageHint:       usageHintMap["bash"],
+				Prefix:          bashSetPfx,
+				Suffix:          bashSetSfx,
+				Delimiter:       bashSetDelim,
+				NoProxyVar:      "no_proxy",
+				NoProxyValue:    "0.0.0.0,127.0.0.1",
 			},
 		},
 		{
@@ -217,16 +215,15 @@ func TestShellCfgSet(t *testing.T) {
 			noProxyValue: "0.0.0.0,127.0.0.1",
 			noProxyFlag:  true,
 			expectedShellCfg: &ShellConfig{
-				DockerCertPath:   constants.MakeMiniPath("certs"),
-				DockerTLSVerify:  "1",
-				DockerHost:       "tcp://127.0.0.1:2376",
-				DockerAPIVersion: constants.DockerAPIVersion,
-				UsageHint:        usageHintMap["bash"],
-				Prefix:           bashSetPfx,
-				Suffix:           bashSetSfx,
-				Delimiter:        bashSetDelim,
-				NoProxyVar:       "no_proxy",
-				NoProxyValue:     "0.0.0.0,127.0.0.1",
+				DockerCertPath:  localpath.MakeMiniPath("certs"),
+				DockerTLSVerify: "1",
+				DockerHost:      "tcp://127.0.0.1:2376",
+				UsageHint:       usageHintMap["bash"],
+				Prefix:          bashSetPfx,
+				Suffix:          bashSetSfx,
+				Delimiter:       bashSetDelim,
+				NoProxyVar:      "no_proxy",
+				NoProxyValue:    "0.0.0.0,127.0.0.1",
 			},
 		},
 	}
@@ -238,13 +235,13 @@ func TestShellCfgSet(t *testing.T) {
 			defaultShellDetector = &FakeShellDetector{test.shell}
 			defaultNoProxyGetter = &FakeNoProxyGetter{test.noProxyVar, test.noProxyValue}
 			noProxy = test.noProxyFlag
-
+			test.api.T = t
 			shellCfg, err := shellCfgSet(test.api)
 			if !reflect.DeepEqual(shellCfg, test.expectedShellCfg) {
 				t.Errorf("Shell cfgs differ: expected %+v, \n\n got %+v", test.expectedShellCfg, shellCfg)
 			}
 			if err != nil && !test.shouldErr {
-				t.Errorf("Test should have failed but didn't return error: %s, error: %s", test.description, err)
+				t.Errorf("Test should have failed but didn't return error: %s, error: %v", test.description, err)
 			}
 			if err == nil && test.shouldErr {
 				t.Errorf("Test didn't return error but should have: %s", test.description)

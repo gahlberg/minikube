@@ -17,11 +17,10 @@ limitations under the License.
 package util
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"net/http"
-	"net/url"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -29,27 +28,34 @@ import (
 	"strings"
 	"time"
 
-	"github.com/blang/semver"
 	units "github.com/docker/go-units"
-	"github.com/golang/glog"
 	"github.com/pkg/errors"
-	"k8s.io/minikube/pkg/minikube/constants"
-	"k8s.io/minikube/pkg/minikube/kubernetes_versions"
-	"k8s.io/minikube/pkg/version"
+	"k8s.io/minikube/pkg/minikube/exit"
+	"k8s.io/minikube/pkg/minikube/out"
 )
 
-type RetriableError struct {
-	Err error
-}
+// ErrPrefix notes an error
+const ErrPrefix = "! "
 
-func (r RetriableError) Error() string { return "Temporary Error: " + r.Err.Error() }
+// OutPrefix notes output
+const OutPrefix = "> "
 
-func CalculateDiskSizeInMB(humanReadableDiskSize string) int {
-	diskSize, err := units.FromHumanSize(humanReadableDiskSize)
-	if err != nil {
-		glog.Errorf("Invalid disk size: %s", err)
+const (
+	downloadURL = "https://storage.googleapis.com/minikube/releases/%s/minikube-%s-amd64%s"
+)
+
+// CalculateSizeInMB returns the number of MB in the human readable string
+func CalculateSizeInMB(humanReadableSize string) int {
+	_, err := strconv.ParseInt(humanReadableSize, 10, 64)
+	if err == nil {
+		humanReadableSize += "mb"
 	}
-	return int(diskSize / units.MB)
+	size, err := units.FromHumanSize(humanReadableSize)
+	if err != nil {
+		exit.WithCodeT(exit.Config, "Invalid size passed in argument: {{.error}}", out.V{"error": err})
+	}
+
+	return int(size / units.MB)
 }
 
 // Until endlessly loops the provided function until a message is received on the done channel.
@@ -74,12 +80,13 @@ func Until(fn func() error, w io.Writer, name string, sleep time.Duration, done 
 	}
 }
 
+// Pad pads the string with newlines
 func Pad(str string) string {
 	return fmt.Sprintf("\n%s\n", str)
 }
 
-// If the file represented by path exists and
-// readable, return true otherwise return false.
+// CanReadFile returns true if the file represented
+// by path exists and is readable, otherwise false.
 func CanReadFile(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -91,92 +98,17 @@ func CanReadFile(path string) bool {
 	return true
 }
 
-func Retry(attempts int, callback func() error) (err error) {
-	return RetryAfter(attempts, callback, 0)
-}
-
-func RetryAfter(attempts int, callback func() error, d time.Duration) (err error) {
-	m := MultiError{}
-	for i := 0; i < attempts; i++ {
-		err = callback()
-		if err == nil {
-			return nil
-		}
-		m.Collect(err)
-		if _, ok := err.(*RetriableError); !ok {
-			return m.ToError()
-		}
-		time.Sleep(d)
-	}
-	return m.ToError()
-}
-
-func GetLocalkubeDownloadURL(versionOrURL string, filename string) (string, error) {
-	urlObj, err := url.Parse(versionOrURL)
-	if err != nil {
-		return "", errors.Wrap(err, "Error parsing localkube download url")
-	}
-	if urlObj.IsAbs() {
-		// scheme was specified in input, is a valid URI.
-		// http.Get will catch unsupported schemes
-		return versionOrURL, nil
-	}
-	if !strings.HasPrefix(versionOrURL, "v") {
-		// no 'v' prefix in input, need to prepend it to version
-		versionOrURL = "v" + versionOrURL
-	}
-	isValidVersion, err := kubernetes_versions.IsValidLocalkubeVersion(versionOrURL, constants.KubernetesVersionGCSURL)
-	if err != nil {
-		return "", errors.Wrap(err, "Error getting valid localkube versions")
-	}
-	if !isValidVersion {
-		return "", errors.New("Not a valid localkube version to download")
-	}
-	if _, err = semver.Make(strings.TrimPrefix(versionOrURL, version.VersionPrefix)); err != nil {
-		return "", errors.Wrap(err, "Error creating semver version from localkube version input string")
-	}
-	return fmt.Sprintf("%s%s/%s", constants.LocalkubeDownloadURLPrefix, versionOrURL, filename), nil
-}
-
-func ParseSHAFromURL(url string) (string, error) {
-	r, err := http.Get(url)
-	if err != nil {
-		return "", errors.Wrap(err, "Error downloading checksum.")
-	} else if r.StatusCode != http.StatusOK {
-		return "", errors.Errorf("Error downloading checksum. Got HTTP Error: %s", r.Status)
-	}
-
-	defer r.Body.Close()
-	body, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		return "", errors.Wrap(err, "Error reading checksum.")
-	}
-
-	return strings.Trim(string(body), "\n"), nil
-}
-
-type MultiError struct {
-	Errors []error
-}
-
-func (m *MultiError) Collect(err error) {
-	if err != nil {
-		m.Errors = append(m.Errors, err)
+// GetBinaryDownloadURL returns a suitable URL for the platform
+func GetBinaryDownloadURL(version, platform string) string {
+	switch platform {
+	case "windows":
+		return fmt.Sprintf(downloadURL, version, platform, ".exe")
+	default:
+		return fmt.Sprintf(downloadURL, version, platform, "")
 	}
 }
 
-func (m MultiError) ToError() error {
-	if len(m.Errors) == 0 {
-		return nil
-	}
-
-	errStrings := []string{}
-	for _, err := range m.Errors {
-		errStrings = append(errStrings, err.Error())
-	}
-	return errors.New(strings.Join(errStrings, "\n"))
-}
-
+// IsDirectory checks if path is a directory
 func IsDirectory(path string) (bool, error) {
 	fileInfo, err := os.Stat(path)
 	if err != nil {
@@ -185,6 +117,7 @@ func IsDirectory(path string) (bool, error) {
 	return fileInfo.IsDir(), nil
 }
 
+// ChownR does a recursive os.Chown
 func ChownR(path string, uid, gid int) error {
 	return filepath.Walk(path, func(name string, info os.FileInfo, err error) error {
 		if err == nil {
@@ -194,6 +127,7 @@ func ChownR(path string, uid, gid int) error {
 	})
 }
 
+// MaybeChownDirRecursiveToMinikubeUser changes ownership of a dir, if requested
 func MaybeChownDirRecursiveToMinikubeUser(dir string) error {
 	if os.Getenv("CHANGE_MINIKUBE_NONE_USER") != "" && os.Getenv("SUDO_USER") != "" {
 		username := os.Getenv("SUDO_USER")
@@ -214,4 +148,55 @@ func MaybeChownDirRecursiveToMinikubeUser(dir string) error {
 		}
 	}
 	return nil
+}
+
+// TeePrefix copies bytes from a reader to writer, logging each new line.
+func TeePrefix(prefix string, r io.Reader, w io.Writer, logger func(format string, args ...interface{})) error {
+	scanner := bufio.NewScanner(r)
+	scanner.Split(bufio.ScanBytes)
+	var line bytes.Buffer
+
+	for scanner.Scan() {
+		b := scanner.Bytes()
+		if _, err := w.Write(b); err != nil {
+			return err
+		}
+
+		if bytes.IndexAny(b, "\r\n") == 0 {
+			if line.Len() > 0 {
+				logger("%s%s", prefix, line.String())
+				line.Reset()
+			}
+			continue
+		}
+		line.Write(b)
+	}
+	// Catch trailing output in case stream does not end with a newline
+	if line.Len() > 0 {
+		logger("%s%s", prefix, line.String())
+	}
+	return nil
+}
+
+// ReplaceChars returns a copy of the src slice with each string modified by the replacer
+func ReplaceChars(src []string, replacer *strings.Replacer) []string {
+	ret := make([]string, len(src))
+	for i, s := range src {
+		ret[i] = replacer.Replace(s)
+	}
+	return ret
+}
+
+// ConcatStrings concatenates each string in the src slice with prefix and postfix and returns a new slice
+func ConcatStrings(src []string, prefix string, postfix string) []string {
+	var buf bytes.Buffer
+	ret := make([]string, len(src))
+	for i, s := range src {
+		buf.WriteString(prefix)
+		buf.WriteString(s)
+		buf.WriteString(postfix)
+		ret[i] = buf.String()
+		buf.Reset()
+	}
+	return ret
 }

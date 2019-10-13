@@ -22,10 +22,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
-	"k8s.io/minikube/pkg/minikube/constants"
 	"k8s.io/minikube/pkg/minikube/tests"
 )
 
@@ -96,7 +96,7 @@ func runCommand(f func(*cobra.Command, []string)) {
 func hideEnv(t *testing.T) func(t *testing.T) {
 	envs := make(map[string]string)
 	for _, env := range os.Environ() {
-		if strings.HasPrefix(env, constants.MinikubeEnvPrefix) {
+		if strings.HasPrefix(env, minikubeEnvPrefix) {
 			line := strings.Split(env, "=")
 			key, val := line[0], line[1]
 			envs[key] = val
@@ -142,40 +142,46 @@ func TestViperConfig(t *testing.T) {
 }
 
 func getEnvVarName(name string) string {
-	return constants.MinikubeEnvPrefix + "_" + strings.ToUpper(name)
+	return minikubeEnvPrefix + "_" + strings.ToUpper(name)
 }
 
-func setValues(t *testing.T, tt configTest) {
+func setValues(tt configTest) error {
 	if tt.FlagValue != "" {
-		pflag.Set(tt.Name, tt.FlagValue)
+		if err := pflag.Set(tt.Name, tt.FlagValue); err != nil {
+			return errors.Wrap(err, "flag set")
+		}
 	}
 	if tt.EnvValue != "" {
 		s := strings.Replace(getEnvVarName(tt.Name), "-", "_", -1)
 		os.Setenv(s, tt.EnvValue)
 	}
 	if tt.ConfigValue != "" {
-		err := initTestConfig(tt.ConfigValue)
-		if err != nil {
-			t.Fatalf("Config %s not read correctly: %v", tt.ConfigValue, err)
+		if err := initTestConfig(tt.ConfigValue); err != nil {
+			return errors.Wrapf(err, "Config %s not read correctly", tt.ConfigValue)
 		}
 	}
+	return nil
 }
 
-func unsetValues(tt configTest) {
-	var f = pflag.Lookup(tt.Name)
-	f.Value.Set(f.DefValue)
+func unsetValues(name string) error {
+	f := pflag.Lookup(name)
+	if err := f.Value.Set(f.DefValue); err != nil {
+		return errors.Wrapf(err, "set(%s)", f.DefValue)
+	}
 	f.Changed = false
-
-	os.Unsetenv(getEnvVarName(tt.Name))
-
+	os.Unsetenv(getEnvVarName(name))
 	viper.Reset()
+	return nil
 }
 
 func TestViperAndFlags(t *testing.T) {
 	restore := hideEnv(t)
 	defer restore(t)
 	for _, tt := range configTests {
-		setValues(t, tt)
+		err := setValues(tt)
+		if err != nil {
+			t.Fatalf("setValues: %v", err)
+		}
 		setupViper()
 		f := pflag.Lookup(tt.Name)
 		if f == nil {
@@ -185,6 +191,9 @@ func TestViperAndFlags(t *testing.T) {
 		if actual != tt.ExpectedValue {
 			t.Errorf("pflag.Value(%s) => %s, wanted %s [%+v]", tt.Name, actual, tt.ExpectedValue, tt)
 		}
-		unsetValues(tt)
+		// Some flag validation may not accept their default value, such as log_at_backtrace :(
+		if err := unsetValues(tt.Name); err != nil {
+			t.Logf("unsetValues(%s) failed: %v", tt.Name, err)
+		}
 	}
 }

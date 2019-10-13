@@ -28,10 +28,10 @@ set -e
 
 OS_ARCH="darwin-amd64"
 VM_DRIVER="hyperkit"
-JOB_NAME="OSX-Hyperkit"
-EXTRA_ARGS="--bootstrapper=localkube"
-EXTRA_START_ARGS="--kubernetes-version=file://$PWD/out/localkube"
-
+JOB_NAME="HyperKit_macOS"
+EXTRA_ARGS="--bootstrapper=kubeadm"
+EXTRA_START_ARGS=""
+PARALLEL_COUNT=3
 
 # Download files and set permissions
 source common.sh
